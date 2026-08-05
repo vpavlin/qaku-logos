@@ -25,7 +25,7 @@ static qaku::Bytes fromHex(const std::string& s){ qaku::Bytes b; for (size_t i=0
 // Minimal base64 (the FFI wants base64 at the channelSend boundary).
 static std::string b64(const qaku::Bytes& in){ static const char* T="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"; std::string o; int val=0,bits=-6; for(uint8_t c:in){val=(val<<8)+c;bits+=8;while(bits>=0){o+=T[(val>>bits)&0x3F];bits-=6;}} if(bits>-6)o+=T[((val<<8)>>(bits+8))&0x3F]; while(o.size()%4)o+='='; return o; }
 
-QakuCoreImpl::~QakuCoreImpl() { if (m_hubTimer) m_hubTimer->stop(); }
+QakuCoreImpl::~QakuCoreImpl() { if (m_hubTimer) { m_hubTimer->stop(); m_hubTimer->deleteLater(); m_hubTimer = nullptr; } }
 
 qaku::HLC QakuCoreImpl::nextHlc() {
     long long t = nowMs();
@@ -43,7 +43,7 @@ void QakuCoreImpl::onContextReady() {
     // std::thread - the delivery async callbacks only dispatch on this thread, so
     // a worker-thread driver leaves createNode hanging). Armed by QAKU_HUB.
     if (std::getenv("QAKU_HUB")) {
-        m_hubTimer = new QTimer(this);
+        m_hubTimer = new QTimer();
         QObject::connect(m_hubTimer, &QTimer::timeout, [this]{ std::lock_guard<std::recursive_mutex> lk(m_mtx); if (!m_nodeReady) bootstrapDelivery(); else resync(); });
         m_hubTimer->start(15000);
     }
