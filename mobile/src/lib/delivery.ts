@@ -27,8 +27,29 @@ const emitter = new NativeEventEmitter(LogosMessaging);
 const utf8 = (s: string) => new TextEncoder().encode(s);
 const fromUtf8 = (b: Uint8Array) => new TextDecoder().decode(b);
 
-// Per-stage diagnostic counters (surface these in the UI Sync card).
-export const counters = { rxRaw: 0, rxSeen: 0, rxOpened: 0, rxOpenFail: 0, rxNew: 0, rxDup: 0, txTotal: 0, peers: -1 };
+// Per-stage diagnostic counters (surface these in the UI Sync card). rxRaw splits
+// into rxNoPayload (event had no payload field) + rxSelfEcho (our own senderId) +
+// rxSeen (a foreign message we actually try to open). rxRaw>0 but rxSeen==0 means
+// we ARE meshed and receiving, but every message is our echo or payload-less.
+export const counters = {
+  rxRaw: 0, rxNoPayload: 0, rxSelfEcho: 0, rxSeen: 0,
+  rxOpened: 0, rxOpenFail: 0, rxNew: 0, rxDup: 0, txTotal: 0, peers: -1,
+};
+
+// Autoshard (RFC 51 gen-0) for a content topic — MUST match qaku_crypto.hpp's
+// shardFor so the phone and desktop show the same shard for a session.
+import { sha256 as sha256hash } from "@noble/hashes/sha256";
+export function shardFor(contentTopic: string, count = 8): number {
+  const parts = contentTopic.split("/"); // ["", app, version, name, enc]
+  if (parts.length < 3) return -1;
+  const app = parts[1], ver = parts[2];
+  const h = sha256hash(utf8(app + ver));
+  let val = 0n;
+  for (let i = 24; i < 32; i++) val = (val << 8n) | BigInt(h[i]);
+  return Number(val % BigInt(count));
+}
+export function getTopic(): string { return topic; }
+export function getShard(): number { return topic ? shardFor(topic) : -1; }
 
 const FLEET_PRESET = "logos.dev";
 // logos.dev fleet bootstrap multiaddrs — the same set the desktop/hub dial. An
@@ -74,8 +95,8 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?:
     // All receives (live relay + SDS channel) arrive on this one JS event.
     emitter.addListener("logosMessage", (m: { channelId?: string; senderId?: string; payload?: string }) => {
       counters.rxRaw++;
-      if (!m || !m.payload) return;
-      if (m.senderId && m.senderId === deviceId) return; // ignore our own echo
+      if (!m || !m.payload) { counters.rxNoPayload++; return; }
+      if (m.senderId && m.senderId === deviceId) { counters.rxSelfEcho++; return; } // our own echo
       counters.rxSeen++;
       for (const cand of payloadCandidates(m.payload)) {
         try {

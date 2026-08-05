@@ -389,6 +389,49 @@ Item {
                     font.pixelSize: Theme.typography.badgeText
                     wrapMode: Text.WordWrap
                 }
+
+                // ---- transport diagnostics (compare with the phone's Sync card) ----
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: Theme.spacing.small
+                    spacing: Theme.spacing.tiny
+                    visible: !!root.st.contentTopic
+                    LogosText {
+                        text: "SYNC / TRANSPORT"
+                        color: Theme.palette.textTertiary
+                        font.pixelSize: Theme.typography.badgeText
+                        font.weight: Theme.typography.weightMedium
+                    }
+                    LogosText {
+                        Layout.fillWidth: true
+                        text: "topic " + (root.st.contentTopic || "-")
+                        color: Theme.palette.textSecondary
+                        font.pixelSize: Theme.typography.badgeText
+                        font.family: "monospace"
+                        wrapMode: Text.WrapAnywhere
+                    }
+                    LogosText {
+                        Layout.fillWidth: true
+                        text: "shard " + (root.st.shard !== undefined ? root.st.shard : "-")
+                              + "   /waku/2/rs/2/" + (root.st.shard !== undefined ? root.st.shard : "?")
+                        color: Theme.palette.textSecondary
+                        font.pixelSize: Theme.typography.badgeText
+                        font.family: "monospace"
+                    }
+                    LogosText {
+                        Layout.fillWidth: true
+                        text: {
+                            var q = root.st.sync || {};
+                            return "rxRaw " + (q.rxRaw||0) + "  rxSeen " + (q.rxSeen||0)
+                                 + "  rxOpen " + (q.rxOpened||0) + "  rxFail " + (q.rxOpenFail||0)
+                                 + "\nrxNew " + (q.rxNew||0) + "  rxDup " + (q.rxDup||0) + "  tx " + (q.txTotal||0);
+                        }
+                        color: Theme.palette.textSecondary
+                        font.pixelSize: Theme.typography.badgeText
+                        font.family: "monospace"
+                        wrapMode: Text.WordWrap
+                    }
+                }
             }
         }
 

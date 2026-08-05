@@ -290,6 +290,12 @@ void QakuCoreImpl::publishState() {
     s["deviceId"] = m_deviceId;
     s["currentId"] = m_current;
     s["role"] = roleFor(cur().log, m_deviceId);
+    // Transport diagnostics: the content topic we publish/subscribe on, and the
+    // autoshard the fleet routes it to. Mobile shows the SAME two for its session;
+    // if the shard differs the two nodes are on different pubsub topics and can
+    // never meet even though both say "Connected".
+    s["contentTopic"] = cur().haveKey ? cur().topic : "";
+    s["shard"] = cur().haveKey ? qaku::shardFor(cur().topic) : -1;
     // The session LIST (the sidebar renders this). Skip an unused default slot
     // (a keyed session with no session.create yet).
     json sessions = json::array();
@@ -493,24 +499,42 @@ void QakuCoreImpl::bootstrapDelivery() {
         if (v.is_object() && v.contains("_bytes") && v["_bytes"].is_string()) return v["_bytes"].get<std::string>();
         return std::string();
     };
+    // The SDS reliable-channel path (onChannelMessageReceived) is AUTHORITATIVE:
+    // it hands us the UNWRAPPED payload. The raw relay path (onMessageReceived)
+    // fires too, but for a channel message its payload is the SDS wire FRAME (~19KB
+    // of causal history/bloom), which never AEAD-opens. Ingesting it only inflated
+    // rxOpenFail with benign noise. So relay ingestion is best-effort + SILENT on
+    // failure (channelActive=false); the channel path counts a real rxOpenFail.
     modules().delivery_module.onMessageReceived(
         [this, toWire](const std::string&, const std::string& contentTopic, const LogosMap& payload, int64_t) {
             std::string p = toWire(payload);
             if (p.empty() && payload.is_object() && payload.contains("payload")) p = toWire(payload["payload"]);
-            fprintf(stderr, "QAKURX relay topic=%s rawtype=%s plen=%zu p0=%.48s\n",
-                    contentTopic.c_str(), payload.type_name(), p.size(), p.c_str());
-            if (!p.empty()) ingestPayload(contentTopic, p);
+            if (!p.empty()) ingestPayload(contentTopic, p, /*channelPath=*/false);
         });
     modules().delivery_module.onChannelMessageReceived(
         [this, toWire](const std::string& channelId, const std::string&, const LogosMap& payload, int64_t) {
             std::string p = toWire(payload);
             if (p.empty() && payload.is_object() && payload.contains("payload")) p = toWire(payload["payload"]);
-            fprintf(stderr, "QAKURX chan id=%s rawtype=%s plen=%zu p0=%.48s\n",
-                    channelId.c_str(), payload.type_name(), p.size(), p.c_str());
-            if (!p.empty()) ingestPayload(channelId, p);
+            if (!p.empty()) ingestPayload(channelId, p, /*channelPath=*/true);
         });
     setStatus("Connecting...");
-    LogosMap cfg = {{"logLevel", "INFO"}, {"mode", "Core"}, {"preset", "logos.dev"}};
+    // RELAY node with the logos.dev fleet entry nodes PINNED. Bare
+    // {mode:Core,preset:logos.dev} gives ZERO bootstrap nodes ("seed node, no
+    // bootstrap") — the node drifts off the fleet, joins no shard mesh, and logs
+    // "No peers for topic"/"NoPeersToPublish": it prints "Connected" (start() ok)
+    // but publishes/receives NOTHING. The phone pins these same 6 nodes and meshes;
+    // the desktop must too or the two never meet. (Same fix the KYM hub needed.)
+    LogosMap cfg = {
+        {"logLevel", "INFO"}, {"mode", "Core"}, {"preset", "logos.dev"}, {"relay", true},
+        {"entryNodes", LogosMap::array({
+            "/dns4/delivery-01.do-ams3.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAmTUbnxLGT9JvV6mu9oPyDjqHK4Phs1VDJNUgESgNSkuby",
+            "/dns4/delivery-02.do-ams3.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAmMK7PYygBtKUQ8EHp7EfaD3bCEsJrkFooK8RQ2PVpJprH",
+            "/dns4/delivery-01.gc-us-central1-a.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm4S1JYkuzDKLKQvwgAhZKs9otxXqt8SCGtB4hoJP1S397",
+            "/dns4/delivery-02.gc-us-central1-a.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm8Y9kgBNtjxvCnf1X6gnZJW5EGE4UwwCL3CCm55TwqBiH",
+            "/dns4/delivery-01.ac-cn-hongkong-c.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm8YokiNun9BkeA1ZRmhLbtNUvcwRr64F69tYj9fkGyuEP",
+            "/dns4/delivery-02.ac-cn-hongkong-c.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAkvwhGHKNry6LACrB8TmEFoCJKEX29XR5dDUzk3UT3UNSE",
+        })},
+    };
     if (const char* ov = std::getenv("QAKU_DELIVERY_CFG")) {
         auto j = json::parse(ov, nullptr, false);
         if (j.is_object()) for (auto it = j.begin(); it != j.end(); ++it) cfg[it.key()] = it.value();
@@ -591,22 +615,22 @@ bool QakuCoreImpl::openAndPush(Session& s, const std::string& sealed) {
     return true;
 }
 
-void QakuCoreImpl::ingestPayload(const std::string& contentTopic, const std::string& payloadB64) {
+void QakuCoreImpl::ingestPayload(const std::string& contentTopic, const std::string& payloadB64, bool channelPath) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
     m_rxRaw++;
     // Route by content topic to the session that owns it (each Q&A = one topic).
     Session* sp = sessionForTopic(contentTopic);
-    if (!sp) {
-        fprintf(stderr, "QAKURX ingest DROP no-session-for-topic topic=%s (have %zu keyed)\n",
-                contentTopic.c_str(), m_sessions.size());
-        return;
-    }
-    m_rxSeen++;
+    if (!sp) return;   // a message on a topic we don't hold (stray shard traffic)
+    // Only the channel path counts toward rxSeen/rxOpenFail — the raw relay path
+    // carries SDS-framed duplicates that never open (benign, not a real failure).
+    if (channelPath) m_rxSeen++;
     // The wire payload is base64 text; a peer may single- OR double-encode. Try
     // the double-peel first (our + the phone's convention), then a single peel.
     std::string once = b64decode(payloadB64);
-    if (openAndPush(*sp, b64decode(once))) { fprintf(stderr, "QAKURX ingest OK double topic=%s\n", contentTopic.c_str()); return; }
-    if (openAndPush(*sp, once))            { fprintf(stderr, "QAKURX ingest OK single topic=%s\n", contentTopic.c_str()); return; }
-    fprintf(stderr, "QAKURX ingest OPENFAIL topic=%s plen=%zu (double+single both failed)\n", contentTopic.c_str(), payloadB64.size());
-    m_rxOpenFail++;
+    if (openAndPush(*sp, b64decode(once))) { if (channelPath) fprintf(stderr, "QAKURX ingest OK double topic=%s\n", contentTopic.c_str()); return; }
+    if (openAndPush(*sp, once))            { if (channelPath) fprintf(stderr, "QAKURX ingest OK single topic=%s\n", contentTopic.c_str()); return; }
+    if (channelPath) {   // silent on the relay path (SDS-frame noise)
+        fprintf(stderr, "QAKURX ingest OPENFAIL topic=%s plen=%zu (double+single both failed)\n", contentTopic.c_str(), payloadB64.size());
+        m_rxOpenFail++;
+    }
 }

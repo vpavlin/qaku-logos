@@ -63,6 +63,23 @@ inline std::string topicFor(const Identity& id, int epoch=0) {
     return std::string("/qaku/1/") + toHex(t.data(), 16) + "/proto";
 }
 
+// Autoshard (RFC 51 gen-0) for a content topic "/app/version/name/enc": the pubsub
+// shard the fleet actually routes on. shard = uint64BE(sha256(app||version)[24..32])
+// % count. logos.dev cluster 2 has 8 shards. mobile + desktop derive the same topic
+// for a session, so this must match on both sides; if not, they never meet.
+inline int shardFor(const std::string& contentTopic, int count = 8) {
+    // parse the first two segments: /app/version/...
+    size_t a = contentTopic.find('/', 0); if (a == std::string::npos) return -1;
+    size_t b = contentTopic.find('/', a + 1); if (b == std::string::npos) return -1;
+    size_t c = contentTopic.find('/', b + 1); if (c == std::string::npos) return -1;
+    std::string app = contentTopic.substr(a + 1, b - a - 1);
+    std::string ver = contentTopic.substr(b + 1, c - b - 1);
+    Bytes in = strBytes(app); { Bytes v = strBytes(ver); in.insert(in.end(), v.begin(), v.end()); }
+    Bytes h = sha256(in);
+    uint64_t val = 0; for (int i = 24; i < 32; i++) val = (val << 8) | h[i]; // big-endian last 8 bytes
+    return (int)(val % (uint64_t)count);
+}
+
 // seal -> nonce(12) || ciphertext || tag(16)
 inline Bytes seal(const Identity& id, const Bytes& plaintext, const std::string& topic) {
     Bytes nonce(12); RAND_bytes(nonce.data(), 12);

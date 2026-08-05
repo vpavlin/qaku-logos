@@ -132,7 +132,7 @@ private:
     void bootstrapDelivery();
     void joinTransport(Session& s);
     void joinAllTransports();
-    void ingestPayload(const std::string& contentTopic, const std::string& payloadB64);
+    void ingestPayload(const std::string& contentTopic, const std::string& payloadB64, bool channelPath = true);
     bool openAndPush(Session& s, const std::string& sealed);
     void sealAndSend(Session& s, const qaku::Event& e);
     void deliverySend(const std::string& topic, const std::string& sealedB64);
