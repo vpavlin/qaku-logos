@@ -29,6 +29,7 @@ export class Session {
     this.emit(); // node is up + subscribed — surface the UI immediately
     // cold-start catch-up in the BACKGROUND: don't block "joined" on the store
     // query's per-peer 8s timeouts (up to ~48s of dead "Joining…").
+    onStatus?.("syncing history…");
     storeSync((sealed) => this.ingest(sealed)).then(() => this.emit()).catch(() => {});
   }
 

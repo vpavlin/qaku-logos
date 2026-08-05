@@ -132,15 +132,28 @@ export function openSealed(sealed: Uint8Array): Uint8Array {
 // phone only needs to READ. Page through the cursor, try each bootstrap peer,
 // decrypt each returned payload exactly like a live receive (idempotent).
 export async function storeSync(onEvent: OnEvent): Promise<number> {
-  if (!ctx) return 0;
+  // Guard the bridge method's presence (an older APK without it must not throw).
+  if (!ctx || typeof LogosMessaging.storeQuery !== "function") return 0;
   let msgs = 0;
   for (const peer of ENTRY_NODES) {
     try {
-      const res = JSON.parse(await LogosMessaging.storeQuery(ctx, JSON.stringify({
-        contentTopics: [topic], includeData: true, paginationForward: true, paginationLimit: 100,
-      }), peer, 8000));
-      for (const m of res.messages || []) {
-        for (const cand of payloadCandidates(m.payload)) {
+      // requestId is MANDATORY: the store-query FFI builds a StoreQueryRequest and
+      // dereferences requestId; omitting it faults natively (hard crash, uncatchable
+      // by this try/catch). KYM's proven query carries one — mirror it exactly.
+      const query = {
+        requestId: `qaku-${storeReqSeq++}`,
+        contentTopics: [topic], includeData: true,
+        paginationForward: true, paginationLimit: 100,
+      };
+      const respStr: string = await LogosMessaging.storeQuery(ctx, JSON.stringify(query), peer, 8000);
+      // The JNI returns a non-JSON sentinel (e.g. "on_response-ok") for an empty
+      // body — treat anything not starting with "{" as "peer answered, nothing new".
+      if (!respStr || respStr.indexOf("{") !== 0) continue;
+      const res = JSON.parse(respStr);
+      const list: any[] = res.messages || res.Messages || res.messageData || [];
+      for (const m of list) {
+        const wm = m.message || m.wakuMessage || m;
+        for (const cand of payloadCandidates(wm.payload)) {
           try { open(identity!, cand, topic); onEvent(cand); msgs++; break; } catch { /* */ }
         }
       }
@@ -149,6 +162,8 @@ export async function storeSync(onEvent: OnEvent): Promise<number> {
   }
   return msgs;
 }
+// Monotonic store-query id (no Date.now needed; unique per process is enough).
+let storeReqSeq = 0;
 
 export async function refreshPeerCount(): Promise<number> {
   if (!ctx) return counters.peers;
