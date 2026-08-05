@@ -497,12 +497,16 @@ void QakuCoreImpl::bootstrapDelivery() {
         [this, toWire](const std::string&, const std::string& contentTopic, const LogosMap& payload, int64_t) {
             std::string p = toWire(payload);
             if (p.empty() && payload.is_object() && payload.contains("payload")) p = toWire(payload["payload"]);
+            fprintf(stderr, "QAKURX relay topic=%s rawtype=%s plen=%zu p0=%.48s\n",
+                    contentTopic.c_str(), payload.type_name(), p.size(), p.c_str());
             if (!p.empty()) ingestPayload(contentTopic, p);
         });
     modules().delivery_module.onChannelMessageReceived(
         [this, toWire](const std::string& channelId, const std::string&, const LogosMap& payload, int64_t) {
             std::string p = toWire(payload);
             if (p.empty() && payload.is_object() && payload.contains("payload")) p = toWire(payload["payload"]);
+            fprintf(stderr, "QAKURX chan id=%s rawtype=%s plen=%zu p0=%.48s\n",
+                    channelId.c_str(), payload.type_name(), p.size(), p.c_str());
             if (!p.empty()) ingestPayload(channelId, p);
         });
     setStatus("Connecting...");
@@ -592,12 +596,17 @@ void QakuCoreImpl::ingestPayload(const std::string& contentTopic, const std::str
     m_rxRaw++;
     // Route by content topic to the session that owns it (each Q&A = one topic).
     Session* sp = sessionForTopic(contentTopic);
-    if (!sp) return;
+    if (!sp) {
+        fprintf(stderr, "QAKURX ingest DROP no-session-for-topic topic=%s (have %zu keyed)\n",
+                contentTopic.c_str(), m_sessions.size());
+        return;
+    }
     m_rxSeen++;
     // The wire payload is base64 text; a peer may single- OR double-encode. Try
     // the double-peel first (our + the phone's convention), then a single peel.
     std::string once = b64decode(payloadB64);
-    if (openAndPush(*sp, b64decode(once))) return;   // double: b64decode(b64decode(payload))
-    if (openAndPush(*sp, once)) return;              // single: b64decode(payload)
+    if (openAndPush(*sp, b64decode(once))) { fprintf(stderr, "QAKURX ingest OK double topic=%s\n", contentTopic.c_str()); return; }
+    if (openAndPush(*sp, once))            { fprintf(stderr, "QAKURX ingest OK single topic=%s\n", contentTopic.c_str()); return; }
+    fprintf(stderr, "QAKURX ingest OPENFAIL topic=%s plen=%zu (double+single both failed)\n", contentTopic.c_str(), payloadB64.size());
     m_rxOpenFail++;
 }
