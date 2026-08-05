@@ -89,8 +89,11 @@ Item {
         } catch (e) {}
         root.qrData = null;
     }
-    // Rebuild the QR whenever the current session's secret changes.
-    onSecretChanged: if (root.secret !== root.lastQrSecret) buildQr()
+    // Rebuild the QR whenever the current session's secret changes — but DEFER it
+    // via Qt.callLater. secret first changes during Component.onCompleted (the first
+    // snapshot), and a synchronous callCore("shareQr") nested inside load wedges the
+    // QML render ("view does not load"). callLater runs it after the view is rendered.
+    onSecretChanged: if (root.secret !== root.lastQrSecret) Qt.callLater(root.buildQr)
     function mutate(m, a) {
         var res = asState(callCore(m, a));
         if (res) { apply(res); return true; }
