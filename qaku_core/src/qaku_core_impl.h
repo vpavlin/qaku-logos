@@ -83,6 +83,10 @@ private:
     void bootstrapDelivery();
     void joinTransport();
     void ingestRaw(const std::string& contentTopic, const std::string& sealed);
+    // Network receive path: the wire payload is base64 (the peer may single- OR
+    // double-encode); try both candidates and ingest whichever AEAD-opens.
+    void ingestPayload(const std::string& contentTopic, const std::string& payloadB64);
+    bool openAndPush(const std::string& sealed);
     void sealAndSend(const qaku::Event& e);
     void deliverySend(const std::string& topic, const std::string& sealedB64);
     void applySecret(const qaku::Bytes& secret, bool persist);
@@ -92,9 +96,11 @@ private:
     std::vector<qaku::Event> m_log;
     std::set<std::string> m_ids;
     qaku::Identity m_id;
+    qaku::Bytes m_secret;          // the raw 32-byte session secret (the pairing code)
     std::string m_topic;
     bool m_haveKey = false;
     bool m_subscribed = false;
+    bool m_deliveryStarting = false;
 
     long long m_wall = 0, m_ctr = 0;
     std::string m_deviceId = "qaku-core";

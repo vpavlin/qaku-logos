@@ -9,8 +9,10 @@
 // fire-and-forget (a synchronous send on the event-loop thread freezes the
 // module on the IPC timeout).
 #include "qaku_core_impl.h"
+#include "logos_sdk.h"   // umbrella: LogosModules + LogosMap(nlohmann::json) + StdLogosResult
 #include <QTimer>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 
 using qaku::json;
@@ -23,7 +25,14 @@ static long long nowMs() {
 static std::string hex(const qaku::Bytes& b){ return qaku::toHex(b.data(), b.size()); }
 static qaku::Bytes fromHex(const std::string& s){ qaku::Bytes b; for (size_t i=0;i+1<s.size();i+=2) b.push_back((uint8_t)std::stoi(s.substr(i,2), nullptr, 16)); return b; }
 // Minimal base64 (the FFI wants base64 at the channelSend boundary).
-static std::string b64(const qaku::Bytes& in){ static const char* T="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"; std::string o; int val=0,bits=-6; for(uint8_t c:in){val=(val<<8)+c;bits+=8;while(bits>=0){o+=T[(val>>bits)&0x3F];bits-=6;}} if(bits>-6)o+=T[((val<<8)>>(bits+8))&0x3F]; while(o.size()%4)o+='='; return o; }
+static const char* kB64T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static std::string b64(const qaku::Bytes& in){ std::string o; int val=0,bits=-6; for(uint8_t c:in){val=(val<<8)+c;bits+=8;while(bits>=0){o+=kB64T[(val>>bits)&0x3F];bits-=6;}} if(bits>-6)o+=kB64T[((val<<8)>>(bits+8))&0x3F]; while(o.size()%4)o+='='; return o; }
+static std::string b64s(const std::string& in){ return b64(qaku::Bytes(in.begin(), in.end())); }
+static std::string b64decode(const std::string& in){ std::vector<int> T(256,-1); for(int i=0;i<64;i++) T[(unsigned char)kB64T[i]]=i; std::string o; int val=0,bits=-8; for(unsigned char c:in){ if(T[c]==-1) break; val=(val<<6)+T[c]; bits+=6; if(bits>=0){ o.push_back(char((val>>bits)&0xFF)); bits-=8; } } return o; }
+// The delivery send() payload must be a JSON byte ARRAY under the current cpp-sdk
+// (a JSON string throws "type must be array, but is string" in the marshaling);
+// this produces the same wire bytes. deliverySend probes array vs string.
+static LogosMap bytesPayload(const std::string& s){ LogosMap a = LogosMap::array(); for (unsigned char c : s) a.push_back((unsigned)c); return a; }
 
 QakuCoreImpl::~QakuCoreImpl() { if (m_hubTimer) { m_hubTimer->stop(); m_hubTimer->deleteLater(); m_hubTimer = nullptr; } }
 
@@ -58,6 +67,7 @@ void QakuCoreImpl::loadOrCreateSecret() {
 }
 
 void QakuCoreImpl::applySecret(const qaku::Bytes& secret, bool /*persist*/) {
+    m_secret = secret;                       // keep the raw code so snapshot() can share it
     m_id = qaku::deriveIdentity(secret);
     m_topic = qaku::topicFor(m_id);
     m_haveKey = true;
@@ -90,6 +100,9 @@ void QakuCoreImpl::publishState() {
     json s = qaku::computeState(m_log);
     s["status"] = m_status;
     s["fingerprint"] = m_haveKey ? m_id.fingerprint : "";
+    // The raw session secret as hex: THIS is the pairing code, meant to be shared
+    // so a phone/peer can join the same derived topic (session.start(fromHex)).
+    s["secret"] = m_haveKey ? hex(m_secret) : "";
     s["deviceId"] = m_deviceId;
     s["sync"] = { {"rxRaw", m_rxRaw}, {"rxSeen", m_rxSeen}, {"rxOpened", m_rxOpened},
                   {"rxOpenFail", m_rxOpenFail}, {"rxNew", m_rxNew}, {"rxDup", m_rxDup}, {"txTotal", m_txTotal} };
@@ -203,29 +216,75 @@ std::string QakuCoreImpl::ingestSealed(std::string sealedHex) {
 }
 
 void QakuCoreImpl::bootstrapDelivery() {
-    if (!m_haveKey || m_nodeReady) return;
-    // modules().delivery_module().createNodeAsync(cfg) with a fleet preset +
-    // entryNodes (a bare preset gives ZERO bootstrap peers -> "No peers for
-    // topic"; pin entryNodes / merge QAKU_DELIVERY_CFG over the default). On the
-    // ready callback (event-loop thread) -> joinTransport().
-    // The callback sets m_nodeReady=true; here we mark intent + join once ready.
-    joinTransport();
+    if (!m_haveKey || m_nodeReady || m_deliveryStarting) return;
+    m_deliveryStarting = true;
+    // Register the receive handlers BEFORE createNode (the position the host wires
+    // them with). BOTH the raw relay path and the SDS reliable-channel path are
+    // registered; only the transport we actually joined delivers. Each extracts
+    // the base64 payload text, then ingestPayload tries single- and double-decode.
+    auto toWire = [](const LogosMap& v) -> std::string {
+        if (v.is_string()) return v.get<std::string>();
+        if (v.is_array()) { std::string s; s.reserve(v.size()); for (const auto& c : v) if (c.is_number_integer()) s.push_back((char)c.get<int>()); return s; }
+        if (v.is_object() && v.contains("_bytes") && v["_bytes"].is_string()) return v["_bytes"].get<std::string>();
+        return std::string();
+    };
+    modules().delivery_module.onMessageReceived(
+        [this, toWire](const std::string&, const std::string& contentTopic, const LogosMap& payload, int64_t) {
+            std::string p = toWire(payload);
+            if (p.empty() && payload.is_object() && payload.contains("payload")) p = toWire(payload["payload"]);
+            if (!p.empty()) ingestPayload(contentTopic, p);
+        });
+    modules().delivery_module.onChannelMessageReceived(
+        [this, toWire](const std::string& channelId, const std::string&, const LogosMap& payload, int64_t) {
+            std::string p = toWire(payload);
+            if (p.empty() && payload.is_object() && payload.contains("payload")) p = toWire(payload["payload"]);
+            if (!p.empty()) ingestPayload(channelId, p);
+        });
+    // Fleet preset + optional entryNodes. A bare preset can give ZERO bootstrap
+    // peers ("No peers for topic"); QAKU_DELIVERY_CFG (a JSON object) is merged
+    // over the default so the hub/desktop can pin entryNodes without a rebuild.
+    setStatus("Connecting...");
+    LogosMap cfg = {{"logLevel", "INFO"}, {"mode", "Core"}, {"preset", "logos.dev"}};
+    if (const char* ov = std::getenv("QAKU_DELIVERY_CFG")) {
+        auto j = json::parse(ov, nullptr, false);
+        if (j.is_object()) for (auto it = j.begin(); it != j.end(); ++it) cfg[it.key()] = it.value();
+    }
+    std::string cfgStr = cfg.dump();
+    fprintf(stderr, "QAKU bootstrapDelivery cfg=%s\n", cfgStr.c_str());
+    auto startNode = [this, cfgStr]() {
+        modules().delivery_module.createNodeAsync(cfgStr, [this](StdLogosResult r) {
+            if (!r.success) { m_deliveryStarting = false; setStatus("Delivery error (createNode): " + r.error); return; }
+            modules().delivery_module.startAsync([this](StdLogosResult r2) {
+                if (!r2.success) { m_deliveryStarting = false; setStatus("Delivery error (start): " + r2.error); return; }
+                std::lock_guard<std::recursive_mutex> lk(m_mtx);
+                m_nodeReady = true;
+                joinTransport();
+                setStatus("Connected - session " + (m_haveKey ? m_id.fingerprint : std::string()));
+                for (auto& e : m_log) sealAndSend(e);   // seed our log for peers already listening
+                publishState();
+            });
+        });
+    };
+    // Headless: delay createNode so the receive-handler subscription IPC lands
+    // before the node is built (else nwaku comes up "No external callbacks" and
+    // messages never reach us). The desktop host wires events synchronously.
+    if (std::getenv("QAKU_HUB")) QTimer::singleShot(1500, startNode);
+    else startNode();
 }
 
 void QakuCoreImpl::joinTransport() {
-    if (!m_haveKey || m_subscribed) return;
+    if (!m_haveKey || !m_nodeReady || m_subscribed) return;
     // SDS Reliable Channels. BOTH calls, in order (subscribe THEN channelCreate)
     // - channelCreate does not itself subscribe the content topic, and the recv
     // service only emits for subscribed topics, so a channelCreate-only join sees
     // ours:0. channelId == contentTopic == our derived topic; senderId == device.
-    //   modules().delivery_module().subscribeAsync(m_topic);
-    //   modules().delivery_module().channelCreateAsync(m_topic, m_topic, m_deviceId);
+    modules().delivery_module.subscribeAsync(m_topic, [](StdLogosResult){});
+    modules().delivery_module.channelCreateAsync(m_topic, m_topic, m_deviceId, [](StdLogosResult){});
     m_subscribed = true;
-    setStatus("Joined session " + (m_haveKey ? m_id.fingerprint : std::string()));
 }
 
 void QakuCoreImpl::sealAndSend(const Event& e) {
-    if (!m_haveKey) return;
+    if (!m_haveKey || !m_nodeReady) return;
     std::string plain = qaku::encodeEvent(e);
     qaku::Bytes sealed = qaku::seal(m_id, qaku::Bytes(plain.begin(), plain.end()), m_topic);
     deliverySend(m_topic, b64(sealed));
@@ -233,27 +292,59 @@ void QakuCoreImpl::sealAndSend(const Event& e) {
 }
 
 void QakuCoreImpl::deliverySend(const std::string& topic, const std::string& sealedB64) {
-    // Robust to either delivery build: newer builds want the payload as a JSON
-    // byte ARRAY and throw "type must be array, but is string" on a string; older
-    // builds want a string. Probe once (array->string), cache m_sendRepr, reuse.
-    // Wire bytes are identical - this only picks the in-process IPC shape.
-    //   channelSendAsync(topic, {"payload": <base64>, "ephemeral": false});
-    (void)topic; (void)sealedB64;
+    if (!m_nodeReady) return;
+    // Double-encode to match the fleet/phone convention: the receiver's delivery
+    // FFI peels one base64 layer, leaving base64 text the app peels a second time
+    // (ingestPayload tries both). Robust to either delivery IPC shape: newer
+    // builds want a JSON byte ARRAY (a string throws "type must be array"), older
+    // ones want a string. Probe once (array->string), cache m_sendRepr, reuse.
+    std::string doubled = b64s(sealedB64);
+    auto attempt = [&](int repr) -> bool {
+        try {
+            LogosMap p = (repr == 1) ? bytesPayload(doubled) : LogosMap(doubled);
+            modules().delivery_module.channelSendAsync(topic, p, [](StdLogosResult){});
+            return true;
+        } catch (...) { return false; }
+    };
+    if (m_sendRepr == 1 || m_sendRepr == 2) { if (attempt(m_sendRepr)) return; m_sendRepr = 0; }
+    if (attempt(1)) { m_sendRepr = 1; return; }
+    if (attempt(2)) { m_sendRepr = 2; return; }
+    fprintf(stderr, "QAKUTX deliverySend: no working payload representation\n");
 }
 
-void QakuCoreImpl::ingestRaw(const std::string& contentTopic, const std::string& sealed) {
-    std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    m_rxRaw++;
-    if (contentTopic != m_topic) { return; }
-    m_rxSeen++;
+// Try to AEAD-open one sealed byte-string and, on success, fold the event in.
+// Returns true if it opened (whether new or a duplicate), false if it did not.
+bool QakuCoreImpl::openAndPush(const std::string& sealed) {
     Event e;
     try {
         qaku::Bytes s(sealed.begin(), sealed.end());
         qaku::Bytes pt = qaku::open(m_id, s, m_topic);
         e = qaku::decodeEvent(std::string(pt.begin(), pt.end()));
-        m_rxOpened++;
-    } catch (const std::exception&) { m_rxOpenFail++; return; }
-    if (m_ids.count(e.id)) { m_rxDup++; return; }
+    } catch (const std::exception&) { return false; }
+    m_rxOpened++;
+    if (m_ids.count(e.id)) { m_rxDup++; return true; }
     m_rxNew++;
     pushEvent(e, false);
+    return true;
+}
+
+void QakuCoreImpl::ingestPayload(const std::string& contentTopic, const std::string& payloadB64) {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    m_rxRaw++;
+    if (contentTopic != m_topic) return;
+    m_rxSeen++;
+    // The wire payload is base64 text; a peer may single- OR double-encode. Try
+    // the double-peel first (our + the phone's convention), then a single peel.
+    std::string once = b64decode(payloadB64);
+    if (openAndPush(b64decode(once))) return;   // double: b64decode(b64decode(payload))
+    if (openAndPush(once)) return;              // single: b64decode(payload)
+    m_rxOpenFail++;
+}
+
+void QakuCoreImpl::ingestRaw(const std::string& contentTopic, const std::string& sealed) {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    m_rxRaw++;
+    if (contentTopic != m_topic) return;
+    m_rxSeen++;
+    if (!openAndPush(sealed)) m_rxOpenFail++;   // manual path: raw sealed bytes
 }

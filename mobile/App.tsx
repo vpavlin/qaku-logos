@@ -16,24 +16,50 @@ export default function App() {
   const [secretHex, setSecretHex] = useState("");
   const [q, setQ] = useState("");
   const [joined, setJoined] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => session.subscribe(() => setState(session.state())), [session]);
 
+  // Joining boots a Waku node (10-30s) and does a store catch-up, so the button
+  // MUST show progress and MUST surface failures - in release, a swallowed throw
+  // just looks like a dead button. A pasted 64-hex secret drives start() onto the
+  // SAME derived topic as the desktop; blank generates a fresh session secret.
   const join = async () => {
-    const secret = secretHex.length === 64 ? fromHex(secretHex) : newSecret();
-    setSecretHex(hex(secret));
-    await session.start(secret);
-    setJoined(true);
+    if (joining) return;
+    const trimmed = secretHex.trim().toLowerCase();
+    if (trimmed.length > 0 && !/^[0-9a-f]{64}$/.test(trimmed)) {
+      setError("Secret must be 64 hex characters (or leave blank to create a new session).");
+      return;
+    }
+    setError("");
+    setJoining(true);
+    try {
+      const secret = trimmed.length === 64 ? fromHex(trimmed) : newSecret();
+      setSecretHex(hex(secret));
+      await session.start(secret);
+      setJoined(true);
+    } catch (e: any) {
+      setError("Join failed: " + (e && e.message ? e.message : String(e)));
+    } finally {
+      setJoining(false);
+    }
   };
 
   return (
     <SafeAreaView style={s.root}>
       <Text style={s.h1}>QAKU</Text>
       {!joined ? (
-        <View style={s.row}>
-          <TextInput style={s.input} placeholder="session secret (hex) or blank to create" placeholderTextColor="#667" value={secretHex} onChangeText={setSecretHex} />
-          <TouchableOpacity style={s.btn} onPress={join}><Text style={s.btnT}>Join</Text></TouchableOpacity>
-        </View>
+        <>
+          <View style={s.row}>
+            <TextInput style={s.input} editable={!joining} placeholder="session secret (hex) or blank to create" placeholderTextColor="#667" value={secretHex} onChangeText={setSecretHex} autoCapitalize="none" autoCorrect={false} />
+            <TouchableOpacity style={[s.btn, joining && s.btnDisabled]} disabled={joining} onPress={join}>
+              <Text style={s.btnT}>{joining ? "Joining…" : "Join"}</Text>
+            </TouchableOpacity>
+          </View>
+          {joining ? <Text style={s.hint}>Starting node and syncing… this can take 10-30s.</Text> : null}
+          {error ? <Text style={s.error}>{error}</Text> : null}
+        </>
       ) : (
         <>
           <View style={s.row}>
@@ -63,7 +89,10 @@ const s = StyleSheet.create({
   row: { flexDirection: "row", gap: 8, marginBottom: 12 },
   input: { flex: 1, backgroundColor: "#1a1e27", color: "#f5f7fa", borderRadius: 8, paddingHorizontal: 12 },
   btn: { backgroundColor: "#2a7d5f", borderRadius: 8, paddingHorizontal: 16, justifyContent: "center" },
+  btnDisabled: { backgroundColor: "#24402f" },
   btnT: { color: "white", fontWeight: "600" },
+  hint: { color: "#8b93a7", fontSize: 12, marginBottom: 8 },
+  error: { color: "#fb3748", fontSize: 13, marginBottom: 8 },
   card: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: "#161a22", borderRadius: 10, padding: 12, marginBottom: 8 },
   up: { backgroundColor: "#232838", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   upT: { color: "#8fd6b4", fontWeight: "700" },
