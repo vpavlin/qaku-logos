@@ -1,11 +1,18 @@
 #pragma once
 // QakuCoreImpl - the QAKU engine + sync as a Logos CORE module (universal
-// authoring). It owns the append-only event log, folds it through the shared
-// std-only engine (qaku_engine.hpp), drives all Q&A mutations, and syncs over
-// delivery_module using SDS Reliable Channels. It runs BOTH standalone under
-// logoscore (the always-on hub) AND behind the desktop `qaku` ui_qml view, which
-// calls these methods and renders snapshot() - ONE implementation of the
-// engine/sync, no ui/hub drift.
+// authoring). It owns one append-only event log PER SESSION, folds each through
+// the shared std-only engine (qaku_engine.hpp), drives all Q&A mutations, and
+// syncs every session over delivery_module using SDS Reliable Channels. It runs
+// BOTH standalone under logoscore (the always-on hub) AND behind the desktop
+// `qaku` ui_qml view, which calls these methods and renders snapshot() - ONE
+// implementation of the engine/sync, no ui/hub drift.
+//
+// Multi-session model (mirrors KYM's multi-budget core): a "session" is a Q&A
+// (its own secret -> identity -> topic -> log -> role). A device holds several at
+// once (m_sessions); it renders/edits the CURRENT one (cur()); ALL of them sync
+// in the background. snapshot() returns the session LIST plus the current
+// session's full detail + its shareable secret. Privacy = who you share a
+// session's secret with.
 //
 // Rules honored (see the basecamp + multiwriter-sync skills):
 //  - public methods return std::string (never int/bool - the dispatcher .dump()s);
@@ -35,13 +42,19 @@ public:
     std::string status();
     std::string fingerprint();
 
-    // --- session lifecycle ---
+    // --- multi-session lifecycle ---
     std::string createSession(std::string title, std::string description);
+    std::string joinSession(std::string secretHex);
+    std::string switchSession(std::string id);
+    std::string deleteSession(std::string id);
+    std::string listSessions();
+
+    // --- current-session config / admins ---
     std::string setConfig(std::string patchJson);
     std::string addAdmin(std::string memberId, std::string name);
     std::string removeAdmin(std::string memberId);
 
-    // --- questions ---
+    // --- questions (operate on the current session) ---
     std::string addQuestion(std::string content);
     std::string editQuestion(std::string questionId, std::string content);
     std::string deleteQuestion(std::string questionId);
@@ -72,37 +85,53 @@ logos_events:
     void statusChanged(const std::string& status);
 
 private:
-    qaku::HLC nextHlc();
-    void pushEvent(const qaku::Event& e, bool broadcast);
+    // Per-session state. Everything belonging to ONE Q&A lives here; qaku_core
+    // holds several at once (m_sessions), renders/edits the "current" one (cur()),
+    // and syncs ALL of them in the background.
+    struct Session {
+        std::string id;
+        std::vector<qaku::Event> log;
+        std::set<std::string> ids;
+        qaku::Identity identity;       // .secret holds the raw 32-byte pairing code
+        std::string topic;
+        std::string fingerprint;
+        bool haveKey = false;
+        bool subscribed = false;
+        long long wall = 0, ctr = 0;
+    };
+
+    // event builders + per-session helpers
+    qaku::HLC nextHlc(Session& s);
+    void pushEvent(Session& s, const qaku::Event& e, bool broadcast);
     std::string adminGuard();
     void publishState();
     void setStatus(const std::string& s);
 
+    // session registry
+    std::string newSessionId();
+    Session& newSessionEntry();
+    void loadOrCreateSecret();
+    Session& cur();
+    const Session& cur() const;
+    Session* sessionForTopic(const std::string& t);
+
     // delivery (all calls async / fire-and-forget - a synchronous send on the
     // event-loop thread freezes the module on the IPC timeout).
     void bootstrapDelivery();
-    void joinTransport();
-    void ingestRaw(const std::string& contentTopic, const std::string& sealed);
-    // Network receive path: the wire payload is base64 (the peer may single- OR
-    // double-encode); try both candidates and ingest whichever AEAD-opens.
+    void joinTransport(Session& s);
+    void joinAllTransports();
     void ingestPayload(const std::string& contentTopic, const std::string& payloadB64);
-    bool openAndPush(const std::string& sealed);
-    void sealAndSend(const qaku::Event& e);
+    bool openAndPush(Session& s, const std::string& sealed);
+    void sealAndSend(Session& s, const qaku::Event& e);
     void deliverySend(const std::string& topic, const std::string& sealedB64);
-    void applySecret(const qaku::Bytes& secret, bool persist);
-    void loadOrCreateSecret();
+    void applySecret(Session& s, const qaku::Bytes& secret, bool persist);
 
     // --- state ---
-    std::vector<qaku::Event> m_log;
-    std::set<std::string> m_ids;
-    qaku::Identity m_id;
-    qaku::Bytes m_secret;          // the raw 32-byte session secret (the pairing code)
-    std::string m_topic;
-    bool m_haveKey = false;
-    bool m_subscribed = false;
+    std::map<std::string, Session> m_sessions;   // id -> session
+    std::vector<std::string> m_order;            // ids in display order
+    std::string m_current;                       // the selected session's id
     bool m_deliveryStarting = false;
 
-    long long m_wall = 0, m_ctr = 0;
     std::string m_deviceId = "qaku-core";
     std::string m_snapshot = "{}";
     std::string m_status = "Starting...";

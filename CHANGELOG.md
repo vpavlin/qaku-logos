@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.1.3 — multi-session + sidebar
+
+QAKU becomes a proper multi-session app, matching the original qaku's UX: a
+device now holds SEVERAL Q&As at once, each with its own secret -> identity ->
+topic -> log -> role, all syncing peer-to-peer in the background; you view/edit
+the CURRENT one. The core is modeled on KYM's multi-budget engine (a
+`std::map<id, Session>` + display order + current + `cur()`).
+
+### qaku_core 0.1.2 (engine + sync core)
+- New session registry: `struct Session` in `m_sessions`, `m_order`, `m_current`,
+  `cur()`, `sessionForTopic()`. The old single session migrates into the map on
+  load.
+- New actions: `createSession(title, description)` (fresh random secret, reuses an
+  empty current slot), `joinSession(secretHex)` (adds a NEW session from a pasted
+  64-hex secret, or switches if already held), `switchSession(id)`,
+  `deleteSession(id)`, `listSessions()`. Every existing action
+  (addQuestion/upvote/postAnswer/moderate/createPoll/votePoll/...) now targets
+  `cur()`.
+- `snapshot()` returns BOTH a `sessions` array (id, title, fingerprint, role,
+  questions, open, current) AND the current session's full detail
+  (questions/answers/polls) + its shareable `secret` hex + `fingerprint` + `role`.
+- Transport is per session: incoming channel/relay messages route by content topic
+  to the owning session (`ingestPayload` -> `sessionForTopic`), and delivery joins
+  + seeds EVERY session on node-ready (background sync for all).
+
+### qaku view 0.1.3 (Basecamp ui_qml)
+- Rebuilt as a sidebar app on the Logos design system (Logos.Theme +
+  Logos.Controls): a LEFT SIDEBAR (QAKU header, a primary "+ New Q&A" with an
+  inline title/description form, a "Join a Q&A" secret-paste affordance, a
+  scrollable session list showing title + role + question count + short
+  fingerprint with the current one highlighted, a Settings device-name field, and
+  a live status line) + a MAIN PANE for the current session (header with
+  Open/Closed, the Share-this-Q&A `LogosCopyableText` secret card, the Ask box,
+  the upvote/answer/moderation question list, and polls).
+
+### mobile 0.1.3 / versionCode 4
+- Version bump; the phone folds via the shared JS engine directly (independent of
+  the core's snapshot shape), so join/sync is unchanged and still builds arm64.
+
 ## v0.1.0 — first deployable release
 
 First shippable cut of QAKU: a local-first, multi-writer Q&A app on Logos.
