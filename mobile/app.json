@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "QAKU",
+    "slug": "qaku",
+    "version": "0.1.0",
+    "platforms": ["android"],
+    "android": {
+      "package": "co.logos.qaku",
+      "versionCode": 1
+    },
+    "plugins": [
+      "./plugins/withLogosDelivery.js"
+    ],
+    "extra": {
+      "comment": "versionCode here is the source of truth; assert it matches the generated android/app/build.gradle after prebuild."
+    }
+  }
+}

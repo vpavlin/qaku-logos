@@ -1,0 +1,25 @@
+{
+  "name": "qaku-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "prebuild": "expo prebuild --platform android",
+    "android": "expo run:android"
+  },
+  "dependencies": {
+    "expo": "~51.0.0",
+    "react": "18.2.0",
+    "react-native": "0.74.0",
+    "expo-secure-store": "~13.0.0",
+    "@noble/hashes": "^1.4.0",
+    "@noble/ciphers": "^1.0.0",
+    "base64-js": "^1.5.1"
+  },
+  "expo": {
+    "install": {
+      "exclude": []
+    }
+  },
+  "comment": "Android-first (arm64 only - no public x86_64 liblogosdelivery.so; test on a real phone). The Logos delivery integration is a hand-written JNI bridge re-applied on every `expo prebuild` by plugins/withLogosDelivery.js (Expo CNG wipes android/)."
+}

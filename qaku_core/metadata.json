@@ -1,0 +1,29 @@
+{
+  "name": "qaku_core",
+  "version": "0.1.0",
+  "type": "core",
+  "interface": "universal",
+  "category": "social",
+  "description": "QAKU engine and sync core: the append-only event-log Q&A engine (questions, upvotes, answers, moderation, polls), session crypto, and Delivery sync over SDS Reliable Channels. Runs headless as the always-on hub and behind the qaku ui_qml view.",
+  "main": "qaku_core_plugin",
+  "dependencies": [
+    "delivery_module"
+  ],
+  "nix": {
+    "packages": {
+      "build": [
+        "openssl"
+      ],
+      "runtime": [
+        "openssl"
+      ]
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}
