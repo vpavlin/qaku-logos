@@ -19,7 +19,7 @@ const { withDangerousMod, withMainApplication, withAppBuildGradle, withGradlePro
 const fs = require("fs");
 const path = require("path");
 
-const LIBS = ["libc++_shared.so", "librln.so", "liblogosdelivery.so", "liblogosjni.so"];
+const LIBS = ["libc++_shared.so", "librln.so", "liblogosdelivery.so", "liblogos_messaging_jni.so"];
 
 function copyDir(src, dst) {
   if (!fs.existsSync(src)) return;
@@ -40,7 +40,8 @@ const withCopyNative = (config) =>
     fs.mkdirSync(jniDst, { recursive: true });
     for (const so of LIBS) {
       const s = path.join(nativeRoot, "arm64-v8a", so);
-      if (fs.existsSync(s)) fs.copyFileSync(s, path.join(jniDst, so));
+      if (!fs.existsSync(s)) throw new Error(`withLogosDelivery: missing native lib ${s}`);
+      fs.copyFileSync(s, path.join(jniDst, so));
     }
     // Kotlin bridge (incl. the channel @ReactMethods)
     copyDir(path.join(nativeRoot, "android", "java"), path.join(androidMain, "java"));
@@ -49,10 +50,10 @@ const withCopyNative = (config) =>
 
 const withPackageRegistration = (config) =>
   withMainApplication(config, (cfg) => {
-    if (!cfg.modResults.contents.includes("LogosMessagingPackage()")) {
+    if (!cfg.modResults.contents.includes("com.receiverandroid.LogosMessagingPackage")) {
       cfg.modResults.contents = cfg.modResults.contents.replace(
-        /(packages\.add\(.*\)\n)/,
-        `$1            packages.add(co.logos.qaku.LogosMessagingPackage())\n`
+        /(PackageList\(this\)\.packages\.apply\s*\{)/,
+        `$1\n          // Native Logos Delivery (embedded Waku node) - manual JNI, not autolinkable.\n          add(com.receiverandroid.LogosMessagingPackage())`
       );
     }
     return cfg;
