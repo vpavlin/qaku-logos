@@ -24,7 +24,53 @@ function extractSecret(input: string): string {
   return s.startsWith("qaku://") && i >= 0 ? s.slice(i + 2).trim() : s;
 }
 
+// --- crash surfacing: release builds hide JS errors (silent close). Capture them
+// and show on screen so a crash is READABLE without a device logcat. If the app
+// STILL hard-closes past this, the fault is native, not JS. ---
+let __lastError = "";
+try {
+  const EU = (global as any).ErrorUtils;
+  if (EU && EU.setGlobalHandler) {
+    EU.setGlobalHandler((e: any, isFatal?: boolean) => {
+      __lastError = (isFatal ? "[FATAL] " : "") + (e && e.message ? e.message : String(e)) + "\n" +
+        String((e && e.stack) || "").split("\n").slice(0, 8).join("\n");
+      // deliberately do NOT rethrow — keep the app alive so the UI can display it
+    });
+  }
+} catch { /* */ }
+
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err: string }> {
+  state = { err: "" };
+  static getDerivedStateFromError(e: any) {
+    return { err: (e && e.message ? e.message : String(e)) + "\n" + String((e && e.stack) || "").split("\n").slice(0, 10).join("\n") };
+  }
+  render() {
+    if (this.state.err) return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#1a0000", padding: 20 }}>
+        <Text style={{ color: "#ff8a8a", fontSize: 13, fontWeight: "bold", marginBottom: 8 }}>QAKU render crash</Text>
+        <ScrollView><Text selectable style={{ color: "#ffbcbc", fontSize: 12 }}>{this.state.err}</Text></ScrollView>
+      </SafeAreaView>
+    );
+    return this.props.children as any;
+  }
+}
+
 export default function App() {
+  const [gerr, setGerr] = useState("");
+  useEffect(() => {
+    const t = setInterval(() => { if (__lastError && __lastError !== gerr) setGerr(__lastError); }, 400);
+    return () => clearInterval(t);
+  }, [gerr]);
+  if (gerr) return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#1a0000", padding: 20 }}>
+      <Text style={{ color: "#ff8a8a", fontSize: 13, fontWeight: "bold", marginBottom: 8 }}>QAKU JS error</Text>
+      <ScrollView><Text selectable style={{ color: "#ffbcbc", fontSize: 12 }}>{gerr}</Text></ScrollView>
+    </SafeAreaView>
+  );
+  return <ErrorBoundary><AppInner /></ErrorBoundary>;
+}
+
+function AppInner() {
   const session = useMemo(() => new Session(), []);
   const [state, setState] = useState<any>({ questions: [] });
   const [secretHex, setSecretHex] = useState("");

@@ -26,9 +26,10 @@ export class Session {
     this.device = await getDeviceId();
     this.clock = new Clock(this.device);
     await startNode(secret, (sealed) => this.ingest(sealed));
-    // cold-start catch-up: pull history from the fleet store, then reconcile live.
-    await storeSync((sealed) => this.ingest(sealed));
-    this.emit();
+    this.emit(); // node is up + subscribed — surface the UI immediately
+    // cold-start catch-up in the BACKGROUND: don't block "joined" on the store
+    // query's per-peer 8s timeouts (up to ~48s of dead "Joining…").
+    storeSync((sealed) => this.ingest(sealed)).then(() => this.emit()).catch(() => {});
   }
 
   state() { return computeState(this.log); }
