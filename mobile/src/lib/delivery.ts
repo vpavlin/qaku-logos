@@ -67,6 +67,7 @@ const ENTRY_NODES: string[] = [
 let didSetup = false;   // setup() is process-wide — once
 let ctx = "";           // the node handle from new()/start() — thread it into every call
 let started = false;
+let renewTimer: ReturnType<typeof setInterval> | null = null; // periodic filter re-subscribe
 let identity: Identity | null = null;
 let topic = "";
 let deviceId = "";
@@ -118,6 +119,14 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?:
   await LogosMessaging.subscribeContentTopic(ctx, topic);
   step("6/6 opening channel…");
   await LogosMessaging.channelCreate(ctx, topic, topic, deviceId);
+  // Content-topic (filter) subscriptions are LEASED by the fleet service node and
+  // expire — on a light/mobile node they're the receive path, so without renewal the
+  // phone silently stops receiving after the lease lapses. Re-subscribe periodically
+  // (idempotent; refreshes the lease). Never re-channelCreate (that resets SDS state).
+  if (renewTimer) clearInterval(renewTimer);
+  renewTimer = setInterval(() => {
+    LogosMessaging.subscribeContentTopic(ctx, topic).catch(() => { /* transient — next tick retries */ });
+  }, 60000);
   step("ready");
 }
 
@@ -130,13 +139,23 @@ function payloadCandidates(payloadB64: string): Uint8Array[] {
   return out;
 }
 
-// Publish one sealed event. Double-encode to match the fleet's convention:
-// the sealed bytes -> base64 text -> that text's utf8 bytes -> base64 again, so
-// the FFI's single decode leaves base64 text the receiver peels a second time.
+// Publish one sealed event via BOTH paths (receivers dedup by event id):
+//  1. channelSend — SDS reliable channel, DOUBLE-base64 (relay-gossip; only reaches
+//     the fleet when this node holds a relay mesh — the desktop/hub case).
+//  2. send — the high-level logosdelivery_send, SINGLE-base64. This LIGHTPUSHES when
+//     the node has no relay mesh, which is the MOBILE case: a phone behind NAT can't
+//     hold a gossip mesh (its relay streams get pruned — "yamux Stream Closed"), so
+//     channelSend goes nowhere. Lightpush hands the message to a fleet service node
+//     that relays it on the shard, where desktop peers receive it via onMessageReceived.
+// Sending both is belt-and-suspenders: whichever transport this node actually has,
+// the event gets out. Each is isolated so one failing path can't block the other.
 export async function publishSealed(sealed: Uint8Array): Promise<void> {
   const sealedB64 = fromByteArray(sealed);
   const doubled = fromByteArray(utf8(sealedB64));
-  await LogosMessaging.channelSend(ctx, topic, JSON.stringify({ payload: doubled, ephemeral: false }));
+  try { await LogosMessaging.channelSend(ctx, topic, JSON.stringify({ payload: doubled, ephemeral: false })); }
+  catch (e) { /* no relay mesh — lightpush below carries it */ }
+  try { await LogosMessaging.send(ctx, JSON.stringify({ contentTopic: topic, payload: sealedB64, ephemeral: false })); }
+  catch (e) { /* lightpush unavailable — channel above may have carried it */ }
   counters.txTotal++;
 }
 
