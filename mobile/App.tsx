@@ -8,7 +8,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
 import { Session } from "./src/lib/session";
 import { newSecret } from "./src/lib/crypto";
-import { counters, getTopic, getShard, refreshPeerCount } from "./src/lib/delivery";
+import { counters, getTopic, getShard, refreshPeerCount, getRxSample } from "./src/lib/delivery";
 
 const hex = (b: Uint8Array) => Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
 const fromHex = (s: string) => new Uint8Array((s.match(/.{1,2}/g) || []).map((h) => parseInt(h, 16)));
@@ -194,6 +194,7 @@ function AppInner() {
             <Text style={s.syncT}>shard {getShard()}   /waku/2/rs/2/{getShard()}   peers {counters.peers}</Text>
             <Text style={s.syncT}>rxRaw {counters.rxRaw} - noPayload {counters.rxNoPayload} - selfEcho {counters.rxSelfEcho} - seen {counters.rxSeen}</Text>
             <Text style={s.syncT}>rxOpened {counters.rxOpened} - rxFail {counters.rxOpenFail} - rxNew {counters.rxNew} - tx {counters.txTotal}</Text>
+            <Text selectable style={s.syncT}>{getRxSample()}</Text>
           </View>
         </>
       )}

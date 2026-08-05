@@ -35,6 +35,11 @@ export const counters = {
   rxRaw: 0, rxNoPayload: 0, rxSelfEcho: 0, rxSeen: 0,
   rxOpened: 0, rxOpenFail: 0, rxNew: 0, rxDup: 0, txTotal: 0, peers: -1,
 };
+// Receive diagnostics: native event-type tally + the first unopenable message's shape.
+export const diag = { chan: 0, msg: 0, err: 0, sample: "" };
+export function getRxSample(): string {
+  return `chan:${diag.chan} msg:${diag.msg} err:${diag.err}${diag.sample ? " | " + diag.sample : ""}`;
+}
 
 // Autoshard (RFC 51 gen-0) for a content topic — MUST match qaku_crypto.hpp's
 // shardFor so the phone and desktop show the same shard for a session.
@@ -104,6 +109,15 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?:
     // event is already in our log, so merge is a harmless no-op).
     emitter.addListener("logosMessage", (evt: { wakuPtr?: string; event?: string }) => {
       counters.rxRaw++;
+      // Diagnostic tally (surfaced in the Sync card): which native event fired, and —
+      // for the first message we CAN'T open — its payload shape + last open error.
+      // This is how we localize a receive failure without a device logcat (KYM).
+      try {
+        const s0 = String((evt && evt.event) || "");
+        if (s0.indexOf("channel_message_received") >= 0) diag.chan++;
+        else if (s0.indexOf("message_received") >= 0) diag.msg++;
+        else if (s0.indexOf("error") >= 0) diag.err++;
+      } catch { /* */ }
       try {
         const raw = evt && evt.event;
         if (!raw) { counters.rxNoPayload++; return; }
@@ -112,10 +126,12 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?:
         const payload = wm && wm.payload != null ? wm.payload : m.payload;
         if (payload == null) { counters.rxNoPayload++; return; }
         counters.rxSeen++;
-        for (const cand of payloadCandidates(payload)) {
+        let lastErr = "";
+        const cands = payloadCandidates(payload);
+        for (const cand of cands) {
           let plaintext: Uint8Array;
           try { plaintext = open(identity!, cand, topic); } // authenticated — only the right candidate wins
-          catch { continue; }
+          catch (e) { lastErr = String((e && (e as any).message) || e).slice(0, 24); continue; }
           counters.rxOpened++;
           try {
             const env = JSON.parse(fromUtf8(plaintext));
@@ -125,6 +141,14 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?:
           return;
         }
         counters.rxOpenFail++;
+        // Capture the FIRST unopenable message's shape so we can see why (arr len /
+        // b64 len, candidates tried, last open throw, channel vs relay event).
+        if (!diag.sample) {
+          const kind = Array.isArray(payload) ? "arr" + payload.length
+            : typeof payload === "string" ? "b64:" + payload.length : typeof payload;
+          const isChan = m && m.eventType === "channel_message_received";
+          diag.sample = `${isChan ? "chan" : "msg"} pl=${kind} cand=${cands.length} err[${lastErr || "none"}]`;
+        }
       } catch { /* foreign traffic / bad shape — never throw in the listener */ }
     });
     started = true;
@@ -159,8 +183,10 @@ function payloadCandidates(payload: any): Uint8Array[] {
   if (Array.isArray(payload)) {
     let s = "";
     for (let i = 0; i < payload.length; i++) s += String.fromCharCode(payload[i] & 0xff);
-    try { out.push(toByteArray(s)); } catch { /* not base64 text */ }
-    out.push(Uint8Array.from(payload.map((b: number) => b & 0xff)));
+    let once: Uint8Array | null = null;
+    try { once = toByteArray(s); out.push(once); } catch { /* not base64 text */ }        // 1 peel
+    if (once) { try { out.push(toByteArray(fromUtf8(once))); } catch { /* not double */ } } // 2 peels
+    out.push(Uint8Array.from(payload.map((b: number) => b & 0xff)));                         // raw bytes
   } else if (typeof payload === "string") {
     try {
       const once = toByteArray(payload);
