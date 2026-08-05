@@ -26,6 +26,27 @@ Item {
     property string stateJson: "{}"
     property var st: ({})
 
+    // The host's bundled Logos design system (Basecamp 0.2.0) predates some controls
+    // (AppField / LogosCopyableText are "not a type" there). Only LogosText +
+    // LogosButton are safe across versions (Perun uses just those). For text inputs we
+    // style a plain QtQuick TextField with design TOKENS instead, so it stays on-theme
+    // yet loads on every Basecamp version.
+    component AppField: TextField {
+        color: Theme.palette.text
+        placeholderTextColor: Theme.palette.textTertiary
+        selectByMouse: true
+        leftPadding: Theme.spacing.small
+        rightPadding: Theme.spacing.small
+        background: Rectangle {
+            radius: Theme.spacing.radiusSmall
+            color: Theme.palette.surface
+            border.color: Theme.palette.border
+            border.width: 1
+        }
+    }
+    // Off-screen helper for the Copy button (base QML has no Clipboard type).
+    TextEdit { id: clip; visible: false }
+
     function callCore(m, a) {
         if (typeof logos === "undefined" || !logos.callModule) return "";
         return String(logos.callModule("qaku_core", m, a || []));
@@ -137,7 +158,6 @@ Item {
                 LogosButton {
                     Layout.fillWidth: true
                     implicitHeight: 42
-                    variant: LogosButton.Variant.Primary
                     text: root.creating ? "Cancel" : "+ New Q&A"
                     onClicked: { root.creating = !root.creating; root.joining = false; }
                 }
@@ -147,13 +167,13 @@ Item {
                     visible: root.creating
                     Layout.fillWidth: true
                     spacing: Theme.spacing.small
-                    LogosTextField {
+                    AppField {
                         id: newTitle
                         Layout.fillWidth: true
                         implicitHeight: 38
                         placeholderText: "Q&A title (e.g. Town Hall)"
                     }
-                    LogosTextField {
+                    AppField {
                         id: newDesc
                         Layout.fillWidth: true
                         implicitHeight: 38
@@ -185,7 +205,7 @@ Item {
                         visible: root.joining
                         Layout.fillWidth: true
                         spacing: Theme.spacing.small
-                        LogosTextField {
+                        AppField {
                             id: joinSecret
                             Layout.fillWidth: true
                             implicitHeight: 38
@@ -318,7 +338,7 @@ Item {
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: Theme.spacing.small
-                        LogosTextField {
+                        AppField {
                             id: deviceField
                             Layout.fillWidth: true
                             implicitHeight: 34
@@ -439,12 +459,19 @@ Item {
                             font.pixelSize: Theme.typography.secondaryText
                             wrapMode: Text.WordWrap
                         }
-                        LogosCopyableText {
+                        RowLayout {
                             Layout.fillWidth: true
-                            text: root.secret
-                            copyText: root.secret
-                            textColor: Theme.palette.text
-                            onCopied: root.toast("Secret copied - share it to let a peer join")
+                            spacing: Theme.spacing.small
+                            AppField {
+                                id: secretField
+                                Layout.fillWidth: true
+                                readOnly: true
+                                text: root.secret
+                            }
+                            LogosButton {
+                                text: "Copy"
+                                onClicked: { clip.text = root.secret; clip.selectAll(); clip.copy(); root.toast("Secret copied - share it to let a peer join"); }
+                            }
                         }
                     }
                 }
@@ -453,7 +480,7 @@ Item {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: Theme.spacing.small
-                    LogosTextField {
+                    AppField {
                         id: qField
                         Layout.fillWidth: true
                         implicitHeight: 40
@@ -462,7 +489,6 @@ Item {
                     }
                     LogosButton {
                         text: "Ask"
-                        variant: LogosButton.Variant.Primary
                         implicitWidth: 92; implicitHeight: 40
                         enabled: root.sessionOpen && qField.text.length > 0
                         onClicked: { root.act("addQuestion", [qField.text], "Could not add question"); qField.text = ""; }
@@ -563,7 +589,7 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.leftMargin: 58 + Theme.spacing.medium
                                 spacing: Theme.spacing.small
-                                LogosTextField {
+                                AppField {
                                     id: ansField
                                     Layout.fillWidth: true
                                     implicitHeight: 36
