@@ -13,10 +13,13 @@
     "@noble/hashes": "^1.4.0",
     "base64-js": "^1.5.1",
     "expo": "~51.0.0",
+    "expo-camera": "~15.0.16",
     "expo-crypto": "~13.0.2",
     "expo-secure-store": "~13.0.0",
     "react": "18.2.0",
-    "react-native": "0.74.0"
+    "react-native": "0.74.0",
+    "react-native-qrcode-svg": "^6.3.21",
+    "react-native-svg": "15.2.0"
   },
   "expo": {
     "install": {

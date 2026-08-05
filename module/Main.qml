@@ -68,6 +68,29 @@ Item {
         root.st = o; root.stateJson = JSON.stringify(o);
     }
     function refresh() { apply(asState(callCore("snapshot", []))); }
+
+    // ---- share QR (qaku_core.shareQr() -> matrix; drawn on a Canvas) ----
+    // The host `qr` core is unreachable from pure QML, so the encoder is vendored
+    // into qaku_core; here we just paint the returned {n,cells} on a Canvas
+    // (Canvas is plain QtQuick - always host-safe, unlike newer design controls).
+    property var qrData: null
+    property string lastQrSecret: ""
+    function buildQr() {
+        if (!root.secret) { root.qrData = null; return; }
+        try {
+            var res = callCore("shareQr", []);
+            for (var k = 0; k < 2 && typeof res === "string"; k++) res = JSON.parse(res);
+            if (res && res.ok && res.n && res.cells && res.cells.length >= res.n * res.n) {
+                root.qrData = { n: res.n, cells: res.cells };
+                root.lastQrSecret = root.secret;
+                try { qrCanvas.requestPaint(); } catch (e2) {}
+                return;
+            }
+        } catch (e) {}
+        root.qrData = null;
+    }
+    // Rebuild the QR whenever the current session's secret changes.
+    onSecretChanged: if (root.secret !== root.lastQrSecret) buildQr()
     function mutate(m, a) {
         var res = asState(callCore(m, a));
         if (res) { apply(res); return true; }
@@ -93,6 +116,7 @@ Item {
     readonly property bool hasSession: root.st.session !== undefined && root.st.session !== null
     readonly property bool sessionOpen: hasSession && root.st.session.enabled !== false
     readonly property string secret: root.st.secret || ""
+    readonly property string shareUri: root.st.shareUri || (root.secret ? ("qaku://join?s=" + root.secret) : "")
     readonly property string fingerprint: root.st.fingerprint || ""
     readonly property var questions: root.st.questions ? root.st.questions : []
     readonly property var polls: root.st.polls ? root.st.polls : []
@@ -209,7 +233,7 @@ Item {
                             id: joinSecret
                             Layout.fillWidth: true
                             implicitHeight: 38
-                            placeholderText: "Paste session secret (64 hex)"
+                            placeholderText: "Paste secret (64 hex) or qaku://join link"
                         }
                         LogosButton {
                             Layout.fillWidth: true
@@ -454,23 +478,86 @@ Item {
                         }
                         LogosText {
                             Layout.fillWidth: true
-                            text: "Share this secret to let a phone or peer join and sync the same Q&A. Keep it private - anyone with it can join."
+                            text: "Scan the QR with the QAKU phone app, or share the link/secret, to let a phone or peer join and sync the same Q&A. The secret is the password - it encrypts every message end-to-end. Keep it private."
                             color: Theme.palette.textSecondary
                             font.pixelSize: Theme.typography.secondaryText
                             wrapMode: Text.WordWrap
                         }
+
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: Theme.spacing.small
-                            AppField {
-                                id: secretField
-                                Layout.fillWidth: true
-                                readOnly: true
-                                text: root.secret
+                            spacing: Theme.spacing.medium
+
+                            // ---- QR of the share URI (qaku://join?s=<secret>) ----
+                            Rectangle {
+                                Layout.alignment: Qt.AlignTop
+                                implicitWidth: 168
+                                implicitHeight: 168
+                                radius: Theme.spacing.radiusSmall
+                                color: "#ffffff"
+                                visible: root.qrData !== null
+                                Canvas {
+                                    id: qrCanvas
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    onPaint: {
+                                        var ctx = getContext("2d"); ctx.reset();
+                                        ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, width, height);
+                                        var d = root.qrData; if (!d || !d.n) return;
+                                        var cell = width / d.n; ctx.fillStyle = "#000000";
+                                        for (var y = 0; y < d.n; y++)
+                                            for (var x = 0; x < d.n; x++)
+                                                if (d.cells[y * d.n + x])
+                                                    ctx.fillRect(Math.floor(x * cell), Math.floor(y * cell), Math.ceil(cell), Math.ceil(cell));
+                                    }
+                                }
                             }
-                            LogosButton {
-                                text: "Copy"
-                                onClicked: { clip.text = root.secret; clip.selectAll(); clip.copy(); root.toast("Secret copied - share it to let a peer join"); }
+
+                            // ---- link + secret + copy buttons ----
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignTop
+                                spacing: Theme.spacing.small
+                                LogosText {
+                                    text: "Share link"
+                                    color: Theme.palette.textTertiary
+                                    font.pixelSize: Theme.typography.badgeText
+                                    font.weight: Theme.typography.weightMedium
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.spacing.small
+                                    AppField {
+                                        id: uriField
+                                        Layout.fillWidth: true
+                                        readOnly: true
+                                        text: root.shareUri
+                                    }
+                                    LogosButton {
+                                        text: "Copy link"
+                                        onClicked: { clip.text = root.shareUri; clip.selectAll(); clip.copy(); root.toast("Share link copied - open or scan it on a phone to join"); }
+                                    }
+                                }
+                                LogosText {
+                                    text: "Secret (password)"
+                                    color: Theme.palette.textTertiary
+                                    font.pixelSize: Theme.typography.badgeText
+                                    font.weight: Theme.typography.weightMedium
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.spacing.small
+                                    AppField {
+                                        id: secretField
+                                        Layout.fillWidth: true
+                                        readOnly: true
+                                        text: root.secret
+                                    }
+                                    LogosButton {
+                                        text: "Copy"
+                                        onClicked: { clip.text = root.secret; clip.selectAll(); clip.copy(); root.toast("Secret copied - share it to let a peer join"); }
+                                    }
+                                }
                             }
                         }
                     }

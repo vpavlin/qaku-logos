@@ -42,6 +42,10 @@ public:
     std::string status();
     std::string fingerprint();
 
+    // --- sharing (QR + URI carrying the current session's secret) ---
+    std::string shareUri();
+    std::string shareQr();
+
     // --- multi-session lifecycle ---
     std::string createSession(std::string title, std::string description);
     std::string joinSession(std::string secretHex);

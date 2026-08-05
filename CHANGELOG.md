@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.1.5 — QR sharing + secret-in-URL sharing model
+
+Sharing a Q&A is now a scannable artifact. The shareable secret is formalized as
+a URI, `qaku://join?s=<64-hex secret>`, that carries everything a peer needs: the
+32-byte secret derives BOTH the Waku topic AND the AEAD payload key (HKDF/HMAC),
+so every message is end-to-end encrypted and the secret IS the password - the
+same secret-in-URL model as the original qaku's password-in-URL, minus a server.
+
+### qaku_core 0.1.3 (engine + sync core)
+- Vendored Nayuki's MIT `qrcodegen.{hpp,cpp}` into the core (the host `qr` module
+  is unreachable from a pure-QML view - see basecamp-qr-core-unreachable).
+- New actions: `shareUri()` returns `qaku://join?s=<secret>` for the current
+  session; `shareQr()` encodes that URI as a QR matrix `{ok,n,cells,text}` (MEDIUM
+  ECC) for the view's Canvas to paint.
+- `joinSession(code)` now accepts EITHER a raw 64-hex secret OR a `qaku://join?s=`
+  URI (prefix stripped), so a scanned QR and a pasted secret share one join path.
+- `snapshot()` adds a `shareUri` field.
+
+### qaku view 0.1.5 (Basecamp ui_qml)
+- The "Share this Q&A" card now renders the QR on a plain QtQuick `Canvas`
+  (host-safe on every Basecamp version) beside a copyable share link and secret.
+- Host-safe controls only (`LogosText` + `LogosButton` + themed `AppField` +
+  `Canvas`) - no `LogosTextField`/`LogosCopyableText`/`variant`.
+- The sidebar Join field accepts a `qaku://join` link as well as a 64-hex secret.
+
+### qaku mobile 0.1.5 (vc5)
+- Added `expo-camera`, `react-native-qrcode-svg`, `react-native-svg`.
+- "Scan QR" button opens the camera and joins from a scanned `qaku://join?s=<hex>`
+  (or raw secret) via the existing `session.start`; camera permission declared via
+  the `expo-camera` config plugin (survives `expo prebuild`).
+- After joining, the current session's `qaku://join` URI is shown as a QR so
+  another phone can scan it. Paste-secret / paste-link Join is kept too.
+
 ## v0.1.3 — multi-session + sidebar
 
 QAKU becomes a proper multi-session app, matching the original qaku's UX: a

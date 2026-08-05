@@ -18,6 +18,8 @@ logos_module(
         src/qaku_engine.hpp
         src/qaku_crypto.hpp
         src/qaku_wire_std.hpp
+        src/qrcodegen.hpp
+        src/qrcodegen.cpp
     INCLUDE_DIRS src
     FIND_PACKAGES OpenSSL
     LINK_LIBRARIES OpenSSL::Crypto

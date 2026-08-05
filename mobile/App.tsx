@@ -1,14 +1,28 @@
 // QAKU mobile - minimal scaffold UI. Joins a session from a pasted secret (hex),
-// folds via the shared engine, and renders questions/upvotes + a Sync card with
-// the per-stage counters (the make-or-break diagnostic).
+// a scanned QR, or a qaku://join?s=<hex> link; folds via the shared engine, and
+// renders questions/upvotes + a Sync card with the per-stage counters (the
+// make-or-break diagnostic).
 import React, { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet } from "react-native";
+import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal } from "react-native";
+import { CameraView, useCameraPermissions } from "expo-camera";
+import QRCode from "react-native-qrcode-svg";
 import { Session } from "./src/lib/session";
 import { newSecret } from "./src/lib/crypto";
 import { counters } from "./src/lib/delivery";
 
 const hex = (b: Uint8Array) => Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
 const fromHex = (s: string) => new Uint8Array((s.match(/.{1,2}/g) || []).map((h) => parseInt(h, 16)));
+
+// The shareable pairing artifact: qaku://join?s=<64-hex secret>. The secret IS
+// the password (it derives the topic AND the AEAD key), so the URI carries
+// everything a peer needs to join and decrypt - the same secret-in-URL model as
+// the original qaku. Strip the prefix down to the raw hex; accept a raw secret too.
+const shareUriFor = (secret: Uint8Array) => "qaku://join?s=" + hex(secret);
+function extractSecret(input: string): string {
+  const s = input.trim();
+  const i = s.indexOf("s=");
+  return s.startsWith("qaku://") && i >= 0 ? s.slice(i + 2).trim() : s;
+}
 
 export default function App() {
   const session = useMemo(() => new Session(), []);
@@ -18,18 +32,22 @@ export default function App() {
   const [joined, setJoined] = useState(false);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
 
   useEffect(() => session.subscribe(() => setState(session.state())), [session]);
 
   // Joining boots a Waku node (10-30s) and does a store catch-up, so the button
   // MUST show progress and MUST surface failures - in release, a swallowed throw
-  // just looks like a dead button. A pasted 64-hex secret drives start() onto the
-  // SAME derived topic as the desktop; blank generates a fresh session secret.
-  const join = async () => {
+  // just looks like a dead button. A pasted 64-hex secret (or scanned qaku://join
+  // link) drives start() onto the SAME derived topic as the desktop; blank
+  // generates a fresh session secret. Takes an optional raw value so the scanner
+  // and the paste field share ONE join path (no second code branch to drift).
+  const join = async (raw?: string) => {
     if (joining) return;
-    const trimmed = secretHex.trim().toLowerCase();
+    const trimmed = extractSecret(raw !== undefined ? raw : secretHex).toLowerCase();
     if (trimmed.length > 0 && !/^[0-9a-f]{64}$/.test(trimmed)) {
-      setError("Secret must be 64 hex characters (or leave blank to create a new session).");
+      setError("Secret must be 64 hex characters or a qaku://join link (or leave blank to create a new session).");
       return;
     }
     setError("");
@@ -46,22 +64,58 @@ export default function App() {
     }
   };
 
+  // Open the scanner, asking for the camera permission on first use.
+  const openScanner = async () => {
+    if (!permission?.granted) {
+      const res = await requestPermission();
+      if (!res.granted) {
+        setError("Camera access is needed to scan a QR - allow it, or paste the secret/link instead.");
+        return;
+      }
+    }
+    setError("");
+    setScanning(true);
+  };
+
+  // A scanned QR carries the same qaku://join?s=<hex> the typed field accepts, so
+  // it goes through exactly one join path.
+  const onScanned = (data: string) => {
+    if (!scanning) return; // ignore the burst of frames after the first hit
+    setScanning(false);
+    join(data);
+  };
+
+  const shareUri = secretHex.length === 64 ? shareUriFor(fromHex(secretHex)) : "";
+
   return (
     <SafeAreaView style={s.root}>
       <Text style={s.h1}>QAKU</Text>
       {!joined ? (
         <>
           <View style={s.row}>
-            <TextInput style={s.input} editable={!joining} placeholder="session secret (hex) or blank to create" placeholderTextColor="#667" value={secretHex} onChangeText={setSecretHex} autoCapitalize="none" autoCorrect={false} />
-            <TouchableOpacity style={[s.btn, joining && s.btnDisabled]} disabled={joining} onPress={join}>
+            <TextInput style={s.input} editable={!joining} placeholder="secret (hex) / qaku://join link, or blank to create" placeholderTextColor="#667" value={secretHex} onChangeText={setSecretHex} autoCapitalize="none" autoCorrect={false} />
+            <TouchableOpacity style={[s.btn, joining && s.btnDisabled]} disabled={joining} onPress={() => join()}>
               <Text style={s.btnT}>{joining ? "Joining…" : "Join"}</Text>
             </TouchableOpacity>
           </View>
+          <TouchableOpacity style={[s.scanBtn, joining && s.btnDisabled]} disabled={joining} onPress={openScanner}>
+            <Text style={s.scanBtnT}>Scan QR</Text>
+          </TouchableOpacity>
           {joining ? <Text style={s.hint}>Starting node and syncing… this can take 10-30s.</Text> : null}
           {error ? <Text style={s.error}>{error}</Text> : null}
         </>
       ) : (
         <>
+          {shareUri ? (
+            <View style={s.shareCard}>
+              <Text style={s.shareTitle}>Share this Q&A</Text>
+              <View style={s.qrBox}>
+                <QRCode value={shareUri} size={200} backgroundColor="#ffffff" color="#000000" />
+              </View>
+              <Text style={s.shareHint}>Scan on another phone, or share the secret, to join and sync. The secret is the password - it encrypts every message end-to-end. Keep it private.</Text>
+              <Text style={s.shareSecret} selectable>{secretHex}</Text>
+            </View>
+          ) : null}
           <View style={s.row}>
             <TextInput style={s.input} placeholder="Ask a question..." placeholderTextColor="#667" value={q} onChangeText={setQ} />
             <TouchableOpacity style={s.btn} onPress={() => { session.ask(q); setQ(""); }}><Text style={s.btnT}>Ask</Text></TouchableOpacity>
@@ -79,6 +133,24 @@ export default function App() {
           </View>
         </>
       )}
+
+      {/* QR scanner overlay */}
+      <Modal visible={scanning} animationType="slide" onRequestClose={() => setScanning(false)}>
+        <View style={s.scannerRoot}>
+          <CameraView
+            style={{ flex: 1 }}
+            facing="back"
+            barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+            onBarcodeScanned={(e) => onScanned(e.data)}
+          />
+          <View style={s.scanHint} pointerEvents="none">
+            <Text style={s.scanHintT}>Point at the QAKU QR shown on the other device</Text>
+          </View>
+          <TouchableOpacity style={s.scanCancel} onPress={() => setScanning(false)}>
+            <Text style={s.btnT}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -91,12 +163,23 @@ const s = StyleSheet.create({
   btn: { backgroundColor: "#2a7d5f", borderRadius: 8, paddingHorizontal: 16, justifyContent: "center" },
   btnDisabled: { backgroundColor: "#24402f" },
   btnT: { color: "white", fontWeight: "600" },
+  scanBtn: { backgroundColor: "#232838", borderRadius: 8, paddingVertical: 12, alignItems: "center", marginBottom: 8 },
+  scanBtnT: { color: "#8fd6b4", fontWeight: "600" },
   hint: { color: "#8b93a7", fontSize: 12, marginBottom: 8 },
   error: { color: "#fb3748", fontSize: 13, marginBottom: 8 },
+  shareCard: { backgroundColor: "#161a22", borderRadius: 12, padding: 16, marginBottom: 12, alignItems: "center" },
+  shareTitle: { color: "#f5f7fa", fontSize: 16, fontWeight: "700", marginBottom: 10, alignSelf: "flex-start" },
+  qrBox: { backgroundColor: "#ffffff", padding: 12, borderRadius: 8 },
+  shareHint: { color: "#8b93a7", fontSize: 12, marginTop: 10, textAlign: "center" },
+  shareSecret: { color: "#8fd6b4", fontSize: 11, fontFamily: "monospace", marginTop: 8, textAlign: "center" },
   card: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: "#161a22", borderRadius: 10, padding: 12, marginBottom: 8 },
   up: { backgroundColor: "#232838", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   upT: { color: "#8fd6b4", fontWeight: "700" },
   qText: { color: "#e7ebf3", flex: 1 },
   sync: { paddingTop: 8, borderTopWidth: 1, borderTopColor: "#232838" },
   syncT: { color: "#8b93a7", fontSize: 11 },
+  scannerRoot: { flex: 1, backgroundColor: "#000" },
+  scanHint: { position: "absolute", top: 80, left: 0, right: 0, alignItems: "center" },
+  scanHintT: { color: "#fff", backgroundColor: "rgba(0,0,0,0.5)", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, fontSize: 13 },
+  scanCancel: { position: "absolute", bottom: 40, alignSelf: "center", backgroundColor: "#2a7d5f", borderRadius: 8, paddingHorizontal: 28, paddingVertical: 12 },
 });

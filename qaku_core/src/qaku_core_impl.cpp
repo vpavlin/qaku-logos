@@ -7,6 +7,7 @@
 // event-loop thread freezes the module on the IPC timeout).
 #include "qaku_core_impl.h"
 #include "logos_sdk.h"   // umbrella: LogosModules + LogosMap(nlohmann::json) + StdLogosResult
+#include "qrcodegen.hpp"  // vendored Nayuki QR encoder (the host qr core is unreachable from a pure-QML view)
 #include <QTimer>
 #include <chrono>
 #include <cstdio>
@@ -35,6 +36,16 @@ static LogosMap bytesPayload(const std::string& s){ LogosMap a = LogosMap::array
 
 // A 64-hex string is a valid session secret (32 bytes).
 static bool isHex64(const std::string& s){ if (s.size()!=64) return false; for (char c : s) { if (!((c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F'))) return false; } return true; }
+// The shareable pairing artifact: qaku://join?s=<64-hex secret> - the secret IS
+// the password (it derives BOTH the Waku topic AND the AEAD payload key), so the
+// URI carries everything a phone/peer needs to join and decrypt, exactly like the
+// original qaku's password-in-URL. Accept a raw 64-hex secret OR this URI.
+static const char* kShareScheme = "qaku://join?s=";
+static std::string stripShareUri(const std::string& in){
+    std::string s = in;
+    if (s.rfind("qaku://", 0) == 0) { auto p = s.find("s="); if (p != std::string::npos) s = s.substr(p + 2); }
+    return s;
+}
 static std::string trim(const std::string& s){ size_t a=s.find_first_not_of(" \t\r\n"); if (a==std::string::npos) return ""; size_t b=s.find_last_not_of(" \t\r\n"); return s.substr(a, b-a+1); }
 static std::string lower(std::string s){ for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }
 
@@ -129,6 +140,39 @@ std::string QakuCoreImpl::setDeviceId(std::string deviceId) {
 std::string QakuCoreImpl::fingerprint() { std::lock_guard<std::recursive_mutex> lk(m_mtx); return cur().haveKey ? cur().fingerprint : ""; }
 std::string QakuCoreImpl::status() { std::lock_guard<std::recursive_mutex> lk(m_mtx); return m_status; }
 
+// The plain shareable URI for the current session (carries the secret).
+std::string QakuCoreImpl::shareUri() {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    if (!cur().haveKey) return "";
+    return std::string(kShareScheme) + hex(cur().identity.secret);
+}
+// Encode that URI as a QR matrix for the view's Canvas. MEDIUM ECC survives a
+// phone camera at a screen angle. Returns {ok,n,cells,text}; the view paints
+// black/white modules from cells[y*n+x] (the host qr core is unreachable, so the
+// encoder is vendored into this core - see basecamp-qr-core-unreachable).
+std::string QakuCoreImpl::shareQr() {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    json out;
+    if (!cur().haveKey) { out["ok"] = false; out["error"] = "no session key yet"; return out.dump(); }
+    const std::string uri = std::string(kShareScheme) + hex(cur().identity.secret);
+    try {
+        const qrcodegen::QrCode qr =
+            qrcodegen::QrCode::encodeText(uri.c_str(), qrcodegen::QrCode::Ecc::MEDIUM);
+        const int n = qr.getSize();
+        json cells = json::array();
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x) cells.push_back(qr.getModule(x, y));
+        out["ok"] = true;
+        out["n"] = n;
+        out["cells"] = std::move(cells);
+        out["text"] = uri;
+    } catch (const std::exception& e) {
+        out["ok"] = false;
+        out["error"] = std::string("qr encode failed: ") + e.what();
+    }
+    return out.dump();
+}
+
 void QakuCoreImpl::setStatus(const std::string& s) { m_status = s; emit statusChanged(s); }
 
 void QakuCoreImpl::pushEvent(Session& s, const Event& e, bool broadcast) {
@@ -148,6 +192,8 @@ void QakuCoreImpl::publishState() {
     // The raw session secret as hex: THIS is the pairing code, meant to be shared
     // so a phone/peer can join the same derived topic (joinSession / session.start).
     s["secret"] = cur().haveKey ? hex(cur().identity.secret) : "";
+    // The full shareable URI (secret-in-URL, like the original qaku's password-in-URL).
+    s["shareUri"] = cur().haveKey ? (std::string(kShareScheme) + hex(cur().identity.secret)) : "";
     s["deviceId"] = m_deviceId;
     s["currentId"] = m_current;
     s["role"] = roleFor(cur().log, m_deviceId);
@@ -223,7 +269,8 @@ std::string QakuCoreImpl::createSession(std::string title, std::string descripti
 }
 std::string QakuCoreImpl::joinSession(std::string secretHex) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    std::string code = lower(trim(secretHex));
+    // Accept a raw 64-hex secret OR a qaku://join?s=<hex> URI (from a scanned QR).
+    std::string code = lower(trim(stripShareUri(trim(secretHex))));
     if (!isHex64(code)) return "{\"error\":\"secret must be 64 hex characters\"}";
     qaku::Bytes s = fromHex(code);
     std::string topic;
