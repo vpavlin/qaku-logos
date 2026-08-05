@@ -79,14 +79,17 @@ QakuCoreImpl::Session& QakuCoreImpl::newSessionEntry() {
     std::string id = newSessionId();
     Session& s = m_sessions[id];
     s.id = id;
+    s.dir = m_dataDir.empty() ? std::string() : (m_dataDir + "/" + id);
     m_order.push_back(id);
     qaku::Bytes secret(32); RAND_bytes(secret.data(), 32);
-    applySecret(s, secret, true);
+    applySecret(s, secret, true);   // writes pair.key
     m_current = id;
+    saveSessions();
     return s;
 }
 // On load: seed a single default session (env QAKU_SECRET or a fresh key). This
-// is the in-place migration of the old single-session core into the map.
+// is the in-place migration of the old single-session core into the map, and (with
+// persistence) the first-run path that puts the default session on disk.
 void QakuCoreImpl::loadOrCreateSecret() {
     Session& s = newSessionEntry();
     if (const char* e = std::getenv("QAKU_SECRET")) {
@@ -94,12 +97,88 @@ void QakuCoreImpl::loadOrCreateSecret() {
     }
 }
 
-void QakuCoreImpl::applySecret(Session& s, const qaku::Bytes& secret, bool /*persist*/) {
+// --- on-disk persistence (mirrors KYM's per-budget layout) ------------------
+// Writable data dir: env QAKU_CORE_DATA (hub/tests) else $HOME/.qaku-core. Each
+// session lives in <root>/<id> (pair.key + log.json); the registry is
+// <root>/sessions.json. Empty m_dataDir = no persistence (all writers guard on it).
+void QakuCoreImpl::setupDataDir() {
+    std::string dir;
+    if (const char* d = std::getenv("QAKU_CORE_DATA")) dir = d;
+    else if (const char* h = std::getenv("HOME")) dir = std::string(h) + "/.qaku-core";
+    if (dir.empty()) return;
+    m_dataDir = qaku::persist::ensureDir(dir) ? dir : std::string();
+}
+
+void QakuCoreImpl::savePersistedLog(Session& s) { qaku::persist::writeLog(s.dir, s.log); }
+
+// Merge the on-disk log into s.log. Multi-instance safety: Basecamp can run more
+// than one qaku_core instance behind a ui plugin (distinct instance ids) sharing
+// the same data dir; merging disk in BEFORE we append means a stale in-memory
+// instance can't clobber another instance's events. Dedup by id + HLC sort make
+// the merge order-independent. No-op when not persisting.
+void QakuCoreImpl::loadPersistedLog(Session& s) {
+    if (s.dir.empty()) return;
+    std::vector<Event> disk = qaku::persist::readLog(s.dir);
+    if (disk.empty()) return;
+    s.log = qaku::mergeEvents(s.log, disk);
+    s.ids.clear();
+    for (auto& e : s.log) {
+        s.ids.insert(e.id);
+        if (e.hlc.wall > s.wall) { s.wall = e.hlc.wall; s.ctr = e.hlc.ctr; }
+    }
+}
+
+// Persist the registry: ids in display order + each session's current title
+// (re-derived from its fold so it's always accurate) + the current selection.
+void QakuCoreImpl::saveSessions() {
+    if (m_dataDir.empty()) return;
+    qaku::persist::Registry r;
+    for (const auto& id : m_order) {
+        auto it = m_sessions.find(id); if (it == m_sessions.end()) continue;
+        const Session& s = it->second;
+        std::string title;
+        json cs = qaku::computeState(s.log);
+        if (cs["session"].is_object()) title = cs["session"].value("title", "");
+        r.sessions.push_back({ s.id, title });
+    }
+    r.current = m_current;
+    qaku::persist::writeRegistry(m_dataDir, r);
+}
+
+// Load persisted sessions on start. For each registered id: read its pair.key
+// (-> applySecret derives identity/topic/fingerprint) + its log.json. A session
+// with a missing/corrupt key is skipped (can't derive a topic) - never fatal.
+// Restores m_order + m_current. First run (no registry) -> create the default.
+void QakuCoreImpl::loadSessions() {
+    if (!m_dataDir.empty()) {
+        qaku::persist::Registry r = qaku::persist::readRegistry(m_dataDir);
+        for (const auto& e : r.sessions) {
+            if (e.id.empty() || m_sessions.count(e.id)) continue;
+            std::string dir = m_dataDir + "/" + e.id;
+            qaku::Bytes secret = qaku::persist::readPairKey(dir);
+            if (secret.size() != 32) continue;   // no usable key: skip this session
+            Session& s = m_sessions[e.id];
+            s.id = e.id;
+            s.dir = dir;
+            m_order.push_back(e.id);
+            applySecret(s, secret, false);        // derive identity/topic (key already on disk)
+            loadPersistedLog(s);
+        }
+        if (!r.current.empty() && m_sessions.count(r.current)) m_current = r.current;
+    }
+    if (m_current.empty() || !m_sessions.count(m_current)) m_current = m_order.empty() ? "" : m_order.front();
+    // First run (or everything skipped): create + persist a fresh default session.
+    if (m_sessions.empty()) loadOrCreateSecret();
+    saveSessions();
+}
+
+void QakuCoreImpl::applySecret(Session& s, const qaku::Bytes& secret, bool persist) {
     s.identity = qaku::deriveIdentity(secret);   // .secret keeps the raw code so snapshot() can share it
     s.topic = qaku::topicFor(s.identity);
     s.fingerprint = s.identity.fingerprint;
     s.haveKey = true;
     s.subscribed = false;
+    if (persist) qaku::persist::writePairKey(s.dir, secret);   // <dir>/pair.key (no-op if dir empty)
     // If delivery is already up, join this session's topic + seed its log. Else
     // the first snapshot()/hub tick bootstraps delivery and subscribes them all.
     if (m_nodeReady) { joinTransport(s); for (auto& e : s.log) sealAndSend(s, e); }
@@ -113,8 +192,15 @@ qaku::HLC QakuCoreImpl::nextHlc(Session& s) {
 
 void QakuCoreImpl::onContextReady() {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    setupDataDir();
+    // Device id: env QAKU_DEVICE_ID (hub/tests) > persisted device.txt > the
+    // default. Persisted so a setDeviceId rename survives restart. Env wins on
+    // every launch when set.
     if (const char* d = std::getenv("QAKU_DEVICE_ID")) m_deviceId = d;
-    loadOrCreateSecret();
+    else if (!m_dataDir.empty()) { std::string p = qaku::persist::readDeviceId(m_dataDir); if (!p.empty()) m_deviceId = p; }
+    // Load persisted sessions (registry + each pair.key + log.json), or create a
+    // fresh default session on first run. Replaces the old in-memory-only seed.
+    loadSessions();
     setStatus("Ready");
     bootstrapDelivery();
     // Headless hub self-drive: a QTimer on the event-loop thread (NEVER a
@@ -135,7 +221,9 @@ std::string QakuCoreImpl::setSecret(std::string secretHex) {
     publishState(); return snapshot();
 }
 std::string QakuCoreImpl::setDeviceId(std::string deviceId) {
-    std::lock_guard<std::recursive_mutex> lk(m_mtx); if (!deviceId.empty()) m_deviceId = deviceId; return snapshot();
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    if (!deviceId.empty()) { m_deviceId = deviceId; qaku::persist::writeDeviceId(m_dataDir, deviceId); }
+    return snapshot();
 }
 std::string QakuCoreImpl::fingerprint() { std::lock_guard<std::recursive_mutex> lk(m_mtx); return cur().haveKey ? cur().fingerprint : ""; }
 std::string QakuCoreImpl::status() { std::lock_guard<std::recursive_mutex> lk(m_mtx); return m_status; }
@@ -176,10 +264,15 @@ std::string QakuCoreImpl::shareQr() {
 void QakuCoreImpl::setStatus(const std::string& s) { m_status = s; emit statusChanged(s); }
 
 void QakuCoreImpl::pushEvent(Session& s, const Event& e, bool broadcast) {
+    // Merge any on-disk events written by a concurrent instance BEFORE appending
+    // (see loadPersistedLog) so this write can't clobber theirs. No-op if not
+    // persisting or nothing new on disk.
+    loadPersistedLog(s);
     if (s.ids.count(e.id)) return;
     s.ids.insert(e.id);
     s.log = qaku::mergeEvents(s.log, { e });
     if (e.hlc.wall > s.wall) { s.wall = e.hlc.wall; s.ctr = e.hlc.ctr; }
+    savePersistedLog(s);   // rewrite <dir>/log.json (small; off any IPC hot path)
     if (broadcast) sealAndSend(s, e);
     publishState();
 }
@@ -265,7 +358,9 @@ std::string QakuCoreImpl::createSession(std::string title, std::string descripti
     if (m_sessions.empty() || !cur().haveKey || !cur().log.empty()) newSessionEntry();
     if (title.empty()) title = "Untitled Q&A";
     Event e = mkEvent(qaku::T::SESSION_CREATE, nextHlc(cur()), {{"sessionId", cur().fingerprint}, {"title", title}, {"description", description}});
-    pushEvent(cur(), e, true); return snapshot();
+    pushEvent(cur(), e, true);
+    saveSessions();   // capture the session title in the registry
+    return snapshot();
 }
 std::string QakuCoreImpl::joinSession(std::string secretHex) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
@@ -276,26 +371,30 @@ std::string QakuCoreImpl::joinSession(std::string secretHex) {
     std::string topic;
     try { topic = qaku::topicFor(qaku::deriveIdentity(s)); } catch (...) { return "{\"error\":\"invalid secret\"}"; }
     // Already hold this session? Switch instead of duplicating.
-    for (auto& kv : m_sessions) if (kv.second.haveKey && kv.second.topic == topic) { m_current = kv.first; return snapshot(); }
+    for (auto& kv : m_sessions) if (kv.second.haveKey && kv.second.topic == topic) { m_current = kv.first; saveSessions(); return snapshot(); }
     // Reuse an empty current slot, else a fresh entry, keyed to the shared secret.
     Session* target = (!m_sessions.empty() && cur().haveKey && cur().log.empty()) ? &cur() : &newSessionEntry();
-    applySecret(*target, s, true);
+    applySecret(*target, s, true);   // writes the joined session's pair.key
     m_current = target->id;
+    saveSessions();
     return snapshot();
 }
 std::string QakuCoreImpl::switchSession(std::string id) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
     if (!m_sessions.count(id)) return "{\"error\":\"no such session\"}";
-    m_current = id; return snapshot();
+    m_current = id; saveSessions(); return snapshot();
 }
 std::string QakuCoreImpl::deleteSession(std::string id) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
     auto it = m_sessions.find(id);
     if (it == m_sessions.end()) return "{\"error\":\"no such session\"}";
+    std::string dir = it->second.dir;
     m_sessions.erase(it);
     m_order.erase(std::remove(m_order.begin(), m_order.end(), id), m_order.end());
     if (m_order.empty()) { newSessionEntry(); }   // keep at least one slot
     else if (m_current == id) m_current = m_order.front();
+    qaku::persist::removeSessionDir(dir);          // wipe its on-disk log + key
+    saveSessions();
     return snapshot();
 }
 std::string QakuCoreImpl::listSessions() { std::lock_guard<std::recursive_mutex> lk(m_mtx); publishState(); return m_snapshot; }
@@ -305,7 +404,9 @@ std::string QakuCoreImpl::setConfig(std::string patchJson) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
     std::string g = adminGuard(); if (!g.empty()) return g;
     json p; try { p = json::parse(patchJson); } catch (...) { return "{\"error\":\"bad patch json\"}"; }
-    pushEvent(cur(), mkEvent(qaku::T::SESSION_CONFIG, nextHlc(cur()), p), true); return snapshot();
+    pushEvent(cur(), mkEvent(qaku::T::SESSION_CONFIG, nextHlc(cur()), p), true);
+    saveSessions();   // a config patch may rename the session; refresh the registry title
+    return snapshot();
 }
 std::string QakuCoreImpl::addAdmin(std::string memberId, std::string name) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;

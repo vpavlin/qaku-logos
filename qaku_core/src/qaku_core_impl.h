@@ -32,6 +32,7 @@ class QTimer;
 #include "qaku_engine.hpp"
 #include "qaku_crypto.hpp"
 #include "qaku_wire_std.hpp"
+#include "qaku_persist_std.hpp"
 
 class QakuCoreImpl : public LogosModuleContext {
 public:
@@ -99,6 +100,7 @@ private:
         qaku::Identity identity;       // .secret holds the raw 32-byte pairing code
         std::string topic;
         std::string fingerprint;
+        std::string dir;               // on-disk dir (m_dataDir + "/" + id); "" = not persisting
         bool haveKey = false;
         bool subscribed = false;
         long long wall = 0, ctr = 0;
@@ -116,6 +118,12 @@ private:
     Session& newSessionEntry();
     void loadOrCreateSecret();
     Session& cur();
+    // on-disk persistence (see qaku_persist_std.hpp). All guard on !m_dataDir.empty().
+    void setupDataDir();
+    void loadSessions();                 // read sessions.json + each pair.key/log.json (or first-run create)
+    void saveSessions();                 // persist the registry (ids, titles, current)
+    void savePersistedLog(Session& s);   // rewrite s.dir/log.json
+    void loadPersistedLog(Session& s);   // merge s.dir/log.json into s.log (multi-instance safe)
     const Session& cur() const;
     Session* sessionForTopic(const std::string& t);
 
@@ -134,6 +142,7 @@ private:
     std::map<std::string, Session> m_sessions;   // id -> session
     std::vector<std::string> m_order;            // ids in display order
     std::string m_current;                       // the selected session's id
+    std::string m_dataDir;                       // ROOT (~/.qaku-core); each session at <root>/<id>
     bool m_deliveryStarting = false;
 
     std::string m_deviceId = "qaku-core";

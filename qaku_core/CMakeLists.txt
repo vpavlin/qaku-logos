@@ -18,6 +18,7 @@ logos_module(
         src/qaku_engine.hpp
         src/qaku_crypto.hpp
         src/qaku_wire_std.hpp
+        src/qaku_persist_std.hpp
         src/qrcodegen.hpp
         src/qrcodegen.cpp
     INCLUDE_DIRS src

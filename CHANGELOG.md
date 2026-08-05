@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.1.7 — on-disk persistence (sessions + messages survive restart)
+
+qaku_core was fully in-memory: every Q&A session and message was lost on a module
+or host restart. This release ports KYM's proven per-tenant persistence so state
+is durable. Transparent to the view and mobile - no API change, no UI change.
+
+### qaku_core 0.1.4 (engine + sync core)
+- New `qaku_persist_std.hpp`: std-only, no-Qt/no-delivery persistence primitives
+  (pair.key / log.json / sessions.json / device.txt read+write). Robust by design -
+  a missing or corrupt file is skipped, never fatal.
+- Writable data dir `QAKU_CORE_DATA` (hub/tests) else `$HOME/.qaku-core`, resolved
+  in `onContextReady()`. Each session persists under `<root>/<id>/`: `pair.key`
+  (raw 32-byte secret) + `log.json` (event log as a JSON array). A `<root>/sessions.json`
+  registry holds display order + titles + the current selection; `<root>/device.txt`
+  keeps the device id stable across restarts.
+- Loads on start (`loadSessions()`): reads the registry, re-derives each session's
+  identity/topic from its `pair.key`, folds its `log.json`, restores order + current;
+  first run creates + persists the default session (in-place migration).
+- Persists on change: `pushEvent` rewrites the session log (and merges any concurrent
+  on-disk writes first, so two Basecamp instances sharing the dir can't clobber each
+  other); `createSession`/`joinSession`/`switchSession`/`deleteSession`/`setConfig`
+  update the registry; `deleteSession` removes the session dir; `setDeviceId` writes
+  `device.txt`. All writes guard on a non-empty data dir.
+- Verified with a compiled restart-survival harness (`test/persist_harness.cpp`):
+  create a session + append a question, tear down, reconstruct from the same
+  `QAKU_CORE_DATA` dir, assert the session title + message + fingerprint come back.
+
+### qaku view 0.1.7 (Basecamp ui_qml)
+- No view code change; rebuilt to bundle qaku_core 0.1.4 (persistence).
+
+### qaku mobile
+- Unchanged this release (persistence is a qaku_core-only, desktop/hub concern).
+
 ## v0.1.5 — QR sharing + secret-in-URL sharing model
 
 Sharing a Q&A is now a scannable artifact. The shareable secret is formalized as
