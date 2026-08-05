@@ -550,8 +550,19 @@ void QakuCoreImpl::bootstrapDelivery() {
                 m_nodeReady = true;
                 joinAllTransports();
                 setStatus("Connected - " + std::to_string(m_order.size()) + " session(s)");
-                // Seed every session's log for peers already listening.
-                for (auto& kv : m_sessions) if (kv.second.haveKey) for (auto& e : kv.second.log) sealAndSend(kv.second, e);
+                // Seed every session's log for peers already listening. The logos.dev
+                // relay mesh on our shard is sparse and one-shot publishes get dropped,
+                // so re-broadcast the whole log a FEW times over the first ~12s (KYM's
+                // seed-burst fix). Idempotent — peers dedup by id. Timers fire on the Qt
+                // thread; joinTransport must have run first (subscribe+channelCreate).
+                auto seed = [this]() {
+                    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+                    if (!m_nodeReady) return;
+                    for (auto& kv : m_sessions) if (kv.second.haveKey) for (auto& e : kv.second.log) sealAndSend(kv.second, e);
+                };
+                seed();
+                QTimer::singleShot(4000, [seed]{ seed(); });
+                QTimer::singleShot(12000, [seed]{ seed(); });
                 publishState();
             });
         });
@@ -583,13 +594,18 @@ void QakuCoreImpl::sealAndSend(Session& s, const Event& e) {
 
 void QakuCoreImpl::deliverySend(const std::string& topic, const std::string& sealedB64) {
     if (!m_nodeReady) return;
-    // Double-encode to match the fleet/phone convention. Robust to either delivery
-    // IPC shape: newer builds want a JSON byte ARRAY, older ones a string. Probe
-    // once (array->string), cache m_sendRepr, reuse.
-    std::string doubled = b64s(sealedB64);
+    // SINGLE-base64, matching KYM's proven kym_core exactly. We hand the transport
+    // the base64 TEXT as bytes (bytesPayload); delivery_module base64-encodes that
+    // once more on the wire, so a peer decodes ONCE to reach our base64 text and a
+    // SECOND time to reach the sealed bytes — the phone's payloadCandidates does
+    // exactly those 1–2 peels. The OLD code added an extra b64s() layer here, so a
+    // desktop/hub message needed THREE peels and the phone could NEVER decode it
+    // (desktop->mobile was dead; desktop<->desktop only worked because both sides
+    // shared the extra layer). Robust to either IPC shape: JSON byte ARRAY (repr 1)
+    // or string (repr 2); probe once, cache m_sendRepr.
     auto attempt = [&](int repr) -> bool {
         try {
-            LogosMap p = (repr == 1) ? bytesPayload(doubled) : LogosMap(doubled);
+            LogosMap p = (repr == 1) ? bytesPayload(sealedB64) : LogosMap(sealedB64);
             modules().delivery_module.channelSendAsync(topic, p, [](StdLogosResult){});
             return true;
         } catch (...) { return false; }
@@ -600,18 +616,35 @@ void QakuCoreImpl::deliverySend(const std::string& topic, const std::string& sea
     fprintf(stderr, "QAKUTX deliverySend: no working payload representation\n");
 }
 
-// Try to AEAD-open one sealed byte-string with a session's key and fold it in.
+// AEAD-open one sealed byte-string with a session's key, then dispatch on the
+// envelope type: an EVENT folds into the log; a SYNC_REQ (a peer that just joined
+// asking for state) makes us re-serve our whole log so they catch up. Returns true
+// iff the bytes decrypted with this session's key (so ingestPayload stops probing).
 bool QakuCoreImpl::openAndPush(Session& s, const std::string& sealed) {
-    Event e;
+    std::string plain;
     try {
         qaku::Bytes bs(sealed.begin(), sealed.end());
         qaku::Bytes pt = qaku::open(s.identity, bs, s.topic);
-        e = qaku::decodeEvent(std::string(pt.begin(), pt.end()));
+        plain = std::string(pt.begin(), pt.end());
     } catch (const std::exception&) { return false; }
     m_rxOpened++;
-    if (s.ids.count(e.id)) { m_rxDup++; return true; }
-    m_rxNew++;
-    pushEvent(s, e, false);
+    try {
+        json o = json::parse(plain);
+        const std::string type = o.value("type", "");
+        if (type == "SYNC_REQ") {
+            // Re-serve the whole log (idempotent — peers dedup by id). Ignore our own
+            // request echoed back. This is the "serve" half of the pull protocol.
+            if (o.value("from", "") != m_deviceId)
+                for (auto& e : s.log) sealAndSend(s, e);
+            return true;
+        }
+        if (type == "EVENT" && o.contains("event")) {
+            Event e = qaku::eventFromJson(o["event"]);
+            if (s.ids.count(e.id)) { m_rxDup++; return true; }
+            m_rxNew++;
+            pushEvent(s, e, false);
+        }
+    } catch (const std::exception&) { /* opened but not a valid envelope — still ours */ }
     return true;
 }
 

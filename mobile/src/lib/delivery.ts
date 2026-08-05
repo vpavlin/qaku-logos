@@ -72,10 +72,11 @@ let identity: Identity | null = null;
 let topic = "";
 let deviceId = "";
 
-type OnEvent = (sealed: Uint8Array) => void;
+type OnEvent = (event: any) => void;          // a decoded EVENT envelope's `event`
+type OnSyncReq = (from: string) => void;      // a peer asking us to re-serve our log
 type OnStatus = (s: string) => void;
 
-export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?: OnStatus): Promise<void> {
+export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?: OnStatus, onSyncReq?: OnSyncReq): Promise<void> {
   const step = (s: string) => { try { onStatus && onStatus(s); } catch { /* */ } };
   identity = deriveIdentity(secret);
   topic = topicFor(identity);
@@ -93,21 +94,38 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?:
     ctx = await LogosMessaging.new({ mode: "Core", preset: FLEET_PRESET, relay: true, entryNodes: ENTRY_NODES });
     step("3/6 starting node…");
     await LogosMessaging.start(ctx);
-    // All receives (live relay + SDS channel) arrive on this one JS event.
-    emitter.addListener("logosMessage", (m: { channelId?: string; senderId?: string; payload?: string }) => {
+    // All receives (live relay + SDS channel) arrive on this one JS event. The
+    // native emits { wakuPtr, event } where `event` is the FFI event as a JSON
+    // STRING — the WakuMessage sits under wakuMessage/message/root and its payload
+    // is a BYTE ARRAY (or base64 string). Parse it, decrypt, then dispatch on the
+    // envelope type (EVENT vs SYNC_REQ). Ported from KYM's startReceiving — the old
+    // qaku handler read a non-existent top-level `m.payload` and dropped everything.
+    // NO self-echo filter: KYM keeps self-echoes and dedups by event id (an echoed
+    // event is already in our log, so merge is a harmless no-op).
+    emitter.addListener("logosMessage", (evt: { wakuPtr?: string; event?: string }) => {
       counters.rxRaw++;
-      if (!m || !m.payload) { counters.rxNoPayload++; return; }
-      if (m.senderId && m.senderId === deviceId) { counters.rxSelfEcho++; return; } // our own echo
-      counters.rxSeen++;
-      for (const cand of payloadCandidates(m.payload)) {
-        try {
-          open(identity!, cand, topic); // verify AEAD before handing up
+      try {
+        const raw = evt && evt.event;
+        if (!raw) { counters.rxNoPayload++; return; }
+        const m: any = JSON.parse(raw);
+        const wm = m.wakuMessage || m.message || m;
+        const payload = wm && wm.payload != null ? wm.payload : m.payload;
+        if (payload == null) { counters.rxNoPayload++; return; }
+        counters.rxSeen++;
+        for (const cand of payloadCandidates(payload)) {
+          let plaintext: Uint8Array;
+          try { plaintext = open(identity!, cand, topic); } // authenticated — only the right candidate wins
+          catch { continue; }
           counters.rxOpened++;
-          onEvent(cand);
+          try {
+            const env = JSON.parse(fromUtf8(plaintext));
+            if (env && env.type === "EVENT" && env.event) onEvent(env.event);
+            else if (env && env.type === "SYNC_REQ" && onSyncReq) onSyncReq(typeof env.from === "string" ? env.from : "");
+          } catch { /* opened but not a valid envelope */ }
           return;
-        } catch { /* try next candidate */ }
-      }
-      counters.rxOpenFail++;
+        }
+        counters.rxOpenFail++;
+      } catch { /* foreign traffic / bad shape — never throw in the listener */ }
     });
     started = true;
     step("4/6 forming mesh (10s)…");
@@ -130,12 +148,26 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?:
   step("ready");
 }
 
-// Try both single- and double-decoded candidates (the FFI base64-encodes once on
-// the event; a peer that double-encodes on send needs a second peel).
-function payloadCandidates(payloadB64: string): Uint8Array[] {
+// A WakuMessage payload arrives EITHER as a base64 string OR (the common case on
+// this native bridge) a raw BYTE ARRAY (number[]) — and when a byte array it may be
+// the base64 *text* bytes or the decoded sealed bytes. Produce every plausible
+// sealed-bytes candidate; open() is authenticated so only the right one decrypts.
+// Ported verbatim from KYM (mobile/src/lib/delivery.ts) — the OLD qaku version only
+// accepted a base64 string and dropped every received (byte-array) message.
+function payloadCandidates(payload: any): Uint8Array[] {
   const out: Uint8Array[] = [];
-  try { out.push(toByteArray(payloadB64)); } catch { /* */ }
-  try { out.push(toByteArray(fromUtf8(toByteArray(payloadB64)))); } catch { /* */ }
+  if (Array.isArray(payload)) {
+    let s = "";
+    for (let i = 0; i < payload.length; i++) s += String.fromCharCode(payload[i] & 0xff);
+    try { out.push(toByteArray(s)); } catch { /* not base64 text */ }
+    out.push(Uint8Array.from(payload.map((b: number) => b & 0xff)));
+  } else if (typeof payload === "string") {
+    try {
+      const once = toByteArray(payload);
+      out.push(once);                                     // single-encoded
+      try { out.push(toByteArray(fromUtf8(once))); } catch { /* not double */ }
+    } catch { /* not base64 */ }
+  }
   return out;
 }
 
@@ -157,6 +189,16 @@ export async function publishSealed(sealed: Uint8Array): Promise<void> {
   try { await LogosMessaging.send(ctx, JSON.stringify({ contentTopic: topic, payload: sealedB64, ephemeral: false })); }
   catch (e) { /* lightpush unavailable — channel above may have carried it */ }
   counters.txTotal++;
+}
+
+// Ask peers to re-serve everything (the "pull" half of sync). liblogosdelivery has
+// no reliable history for a NAT'd phone beyond store, so on join we publish a
+// SYNC_REQ; every peer that holds the session re-sends its whole log. Idempotent —
+// receivers dedup by event id, so asking repeatedly is harmless. Mirrors KYM.
+export async function sendSyncReq(): Promise<void> {
+  if (!ctx || !identity) return;
+  const env = { v: 1, type: "SYNC_REQ", from: deviceId };
+  try { await publishSealed(sealEvent(utf8(JSON.stringify(env)))); } catch { /* offline — next join retries */ }
 }
 
 // Seal an event's wire bytes for publishing.
@@ -194,7 +236,11 @@ export async function storeSync(onEvent: OnEvent): Promise<number> {
       for (const m of list) {
         const wm = m.message || m.wakuMessage || m;
         for (const cand of payloadCandidates(wm.payload)) {
-          try { open(identity!, cand, topic); onEvent(cand); msgs++; break; } catch { /* */ }
+          try {
+            const env = JSON.parse(fromUtf8(open(identity!, cand, topic)));
+            if (env && env.type === "EVENT" && env.event) { onEvent(env.event); msgs++; }
+            break; // opened — done with this message
+          } catch { /* try next candidate */ }
         }
       }
       if (msgs > 0) break;
