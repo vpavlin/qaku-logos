@@ -5,16 +5,18 @@
   "main": "index.js",
   "scripts": {
     "prebuild": "expo prebuild --platform android",
-    "android": "expo run:android"
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
-    "expo": "~51.0.0",
-    "react": "18.2.0",
-    "react-native": "0.74.0",
-    "expo-secure-store": "~13.0.0",
-    "@noble/hashes": "^1.4.0",
     "@noble/ciphers": "^1.0.0",
-    "base64-js": "^1.5.1"
+    "@noble/hashes": "^1.4.0",
+    "base64-js": "^1.5.1",
+    "expo": "~51.0.0",
+    "expo-crypto": "~13.0.2",
+    "expo-secure-store": "~13.0.0",
+    "react": "18.2.0",
+    "react-native": "0.74.0"
   },
   "expo": {
     "install": {

@@ -4,6 +4,9 @@
     "slug": "qaku",
     "version": "0.1.0",
     "platforms": ["android"],
+    "experiments": {
+      "onDemandFilesystem": false
+    },
     "android": {
       "package": "co.logos.qaku",
       "versionCode": 1
