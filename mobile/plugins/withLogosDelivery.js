@@ -50,12 +50,25 @@ const withCopyNative = (config) =>
 
 const withPackageRegistration = (config) =>
   withMainApplication(config, (cfg) => {
-    if (!cfg.modResults.contents.includes("com.receiverandroid.LogosMessagingPackage")) {
-      cfg.modResults.contents = cfg.modResults.contents.replace(
+    let src = cfg.modResults.contents;
+    if (src.includes("com.receiverandroid.LogosMessagingPackage")) return cfg;
+    const ADD = `apply {\n            // Native Logos Delivery (embedded Waku node) - manual JNI, not autolinkable.\n            add(com.receiverandroid.LogosMessagingPackage())\n          }`;
+    // Two known template shapes: `.packages.apply { ... }` (newer) and a bare
+    // `return PackageList(this).packages` (expo 51 / RN 0.74).
+    if (/PackageList\(this\)\.packages\.apply\s*\{/.test(src)) {
+      src = src.replace(
         /(PackageList\(this\)\.packages\.apply\s*\{)/,
-        `$1\n          // Native Logos Delivery (embedded Waku node) - manual JNI, not autolinkable.\n          add(com.receiverandroid.LogosMessagingPackage())`
+        `$1\n            add(com.receiverandroid.LogosMessagingPackage())`
       );
+    } else if (/return\s+PackageList\(this\)\.packages\b(?!\.)/.test(src)) {
+      src = src.replace(
+        /return\s+PackageList\(this\)\.packages\b(?!\.)/,
+        `return PackageList(this).packages.${ADD}`
+      );
+    } else {
+      throw new Error("withLogosDelivery: could not find PackageList(this).packages to register the native package");
     }
+    cfg.modResults.contents = src;
     return cfg;
   });
 
