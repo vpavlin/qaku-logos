@@ -8,7 +8,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
 import { Session } from "./src/lib/session";
 import { newSecret } from "./src/lib/crypto";
-import { counters, getTopic, getShard } from "./src/lib/delivery";
+import { counters, getTopic, getShard, refreshPeerCount } from "./src/lib/delivery";
 
 const hex = (b: Uint8Array) => Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
 const fromHex = (s: string) => new Uint8Array((s.match(/.{1,2}/g) || []).map((h) => parseInt(h, 16)));
@@ -83,6 +83,20 @@ function AppInner() {
   const [permission, requestPermission] = useCameraPermissions();
 
   useEffect(() => session.subscribe(() => setState(session.state())), [session]);
+
+  // Keep the Sync card live: poll the node's peer count and force a re-render every
+  // 3s while joined. Without this, counters.peers stays at its initial -1 forever
+  // (refreshPeerCount was never called) and rxRaw/tx only moved on receive/send —
+  // so "peers -1" was a stale display, NOT a real "no peers".
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (!joined) return;
+    const t = setInterval(() => {
+      refreshPeerCount().catch(() => {});
+      forceTick((n) => n + 1);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [joined]);
 
   // Joining boots a Waku node (10-30s) and does a store catch-up, so the button
   // MUST show progress and MUST surface failures - in release, a swallowed throw
