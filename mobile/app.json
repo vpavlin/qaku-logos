@@ -2,14 +2,20 @@
   "expo": {
     "name": "QAKU",
     "slug": "qaku",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "platforms": ["android"],
+    "icon": "./assets/icon.png",
     "experiments": {
       "onDemandFilesystem": false
     },
     "android": {
       "package": "co.logos.qaku",
-      "versionCode": 1
+      "versionCode": 2,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundImage": "./assets/adaptive-bg.png",
+        "backgroundColor": "#000000"
+      }
     },
     "plugins": [
       "./plugins/withSplashColor.js",
