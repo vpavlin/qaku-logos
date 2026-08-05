@@ -77,6 +77,7 @@ function AppInner() {
   const [q, setQ] = useState("");
   const [joined, setJoined] = useState(false);
   const [joining, setJoining] = useState(false);
+  const [joinStatus, setJoinStatus] = useState("");
   const [error, setError] = useState("");
   const [scanning, setScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
@@ -101,7 +102,7 @@ function AppInner() {
     try {
       const secret = trimmed.length === 64 ? fromHex(trimmed) : newSecret();
       setSecretHex(hex(secret));
-      await session.start(secret);
+      await session.start(secret, setJoinStatus);
       setJoined(true);
     } catch (e: any) {
       setError("Join failed: " + (e && e.message ? e.message : String(e)));
@@ -147,7 +148,7 @@ function AppInner() {
           <TouchableOpacity style={[s.scanBtn, joining && s.btnDisabled]} disabled={joining} onPress={openScanner}>
             <Text style={s.scanBtnT}>Scan QR</Text>
           </TouchableOpacity>
-          {joining ? <Text style={s.hint}>Starting node and syncing… this can take 10-30s.</Text> : null}
+          {joining ? <Text selectable style={s.hint}>{joinStatus || "starting…"}  (10-30s)</Text> : null}
           {error ? <Text style={s.error}>{error}</Text> : null}
         </>
       ) : (

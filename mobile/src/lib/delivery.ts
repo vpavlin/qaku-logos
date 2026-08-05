@@ -51,8 +51,10 @@ let topic = "";
 let deviceId = "";
 
 type OnEvent = (sealed: Uint8Array) => void;
+type OnStatus = (s: string) => void;
 
-export async function startNode(secret: Uint8Array, onEvent: OnEvent): Promise<void> {
+export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?: OnStatus): Promise<void> {
+  const step = (s: string) => { try { onStatus && onStatus(s); } catch { /* */ } };
   identity = deriveIdentity(secret);
   topic = topicFor(identity);
   deviceId = await getDeviceId();
@@ -61,8 +63,13 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent): Promise<v
     // 1. load the native libs (no config, once). 2. create the node -> ctx.
     // 3. start it. RELAY config (NO light-client fields — filter/lightpush/store
     // make waku_new reject the config -> node offline); auto-shard handles the shard.
+    // Each step reports status BEFORE the native call so a native crash's last-seen
+    // status names the crashing call (localize without a device logcat).
+    step("1/6 loading native libs…");
     if (!didSetup) { await LogosMessaging.setup(); didSetup = true; }
+    step("2/6 creating node…");
     ctx = await LogosMessaging.new({ mode: "Core", preset: FLEET_PRESET, relay: true, entryNodes: ENTRY_NODES });
+    step("3/6 starting node…");
     await LogosMessaging.start(ctx);
     // All receives (live relay + SDS channel) arrive on this one JS event.
     emitter.addListener("logosMessage", (m: { channelId?: string; senderId?: string; payload?: string }) => {
@@ -81,12 +88,16 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent): Promise<v
       counters.rxOpenFail++;
     });
     started = true;
+    step("4/6 forming mesh (10s)…");
     await new Promise((r) => setTimeout(r, 10000)); // let the mesh form before first publish
   }
 
   // BOTH, in order: subscribe the content topic, THEN create the channel.
+  step("5/6 subscribing to topic…");
   await LogosMessaging.subscribeContentTopic(ctx, topic);
+  step("6/6 opening channel…");
   await LogosMessaging.channelCreate(ctx, topic, topic, deviceId);
+  step("ready");
 }
 
 // Try both single- and double-decoded candidates (the FFI base64-encodes once on
