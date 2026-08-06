@@ -65,12 +65,19 @@ export class Session {
     }
   }
 
-  // Author a local event: stamp HLC, merge, seal + publish.
+  // Author a local event: stamp HLC, merge, seal + publish. A NAT'd phone's gossip
+  // mesh prunes/reforms, so a single publish often falls into a mesh gap and never
+  // leaves. Re-publish the SAME sealed bytes a few times over ~40s to catch a
+  // momentary mesh; receivers dedup by event id so the repeats are harmless.
   async append(type: keyof typeof ev, payload: any) {
     const event = (ev as any)[type](this.clock.send(), payload);
     this.merge(event);
     this.emit();
-    await publishSealed(sealEvent(encodeEvent(event)));
+    const sealed = sealEvent(encodeEvent(event));
+    await publishSealed(sealed);
+    for (const delay of [6000, 18000, 40000]) {
+      setTimeout(() => { publishSealed(sealed).catch(() => {}); }, delay);
+    }
   }
 
   // Convenience domain actions (mirror the desktop core surface).

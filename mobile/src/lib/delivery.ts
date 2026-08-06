@@ -34,7 +34,7 @@ import { utf8Bytes as utf8, utf8Decode as fromUtf8 } from "./utf8";
 // we ARE meshed and receiving, but every message is our echo or payload-less.
 export const counters = {
   rxRaw: 0, rxNoPayload: 0, rxSelfEcho: 0, rxSeen: 0,
-  rxOpened: 0, rxOpenFail: 0, rxNew: 0, rxDup: 0, txTotal: 0, peers: -1,
+  rxOpened: 0, rxOpenFail: 0, rxNew: 0, rxDup: 0, txTotal: 0, peers: -1, mesh: -1,
 };
 // Receive diagnostics: native event-type tally + the first unopenable message's shape.
 export const diag = { chan: 0, msg: 0, err: 0, sample: "" };
@@ -286,6 +286,11 @@ export async function refreshPeerCount(): Promise<number> {
     // positive signal only; never conclude "offline" from 0. Trust a received msg.
     const m = /libp2p_peers\s+(\d+)/.exec(metrics);
     counters.peers = m ? parseInt(m[1], 10) : counters.peers;
+    // GOSSIP MESH peers — this is what a publish needs. A relay node behind NAT can
+    // have connected peers (peers>0) but 0 in the gossip mesh, so channelSend/gossip
+    // has nowhere to go. mesh==0 = can't publish; the send diagnostic we were missing.
+    const mm = /libp2p_gossipsub_peers_per_topic_mesh\{[^}]*\}\s+([\d.]+)/.exec(metrics);
+    counters.mesh = mm ? Math.round(parseFloat(mm[1])) : counters.mesh;
   } catch { /* */ }
   return counters.peers;
 }

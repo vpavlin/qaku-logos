@@ -191,7 +191,7 @@ function AppInner() {
           </ScrollView>
           <View style={s.sync}>
             <Text selectable style={s.syncT}>topic {getTopic() || "-"}</Text>
-            <Text style={s.syncT}>shard {getShard()}   /waku/2/rs/2/{getShard()}   peers {counters.peers}</Text>
+            <Text style={s.syncT}>shard {getShard()}   peers {counters.peers}   mesh {counters.mesh}{counters.mesh === 0 ? " (can't publish!)" : ""}</Text>
             <Text style={s.syncT}>rxRaw {counters.rxRaw} - noPayload {counters.rxNoPayload} - selfEcho {counters.rxSelfEcho} - seen {counters.rxSeen}</Text>
             <Text style={s.syncT}>rxOpened {counters.rxOpened} - rxFail {counters.rxOpenFail} - rxNew {counters.rxNew} - tx {counters.txTotal}</Text>
             <Text selectable style={s.syncT}>{getRxSample()}</Text>
