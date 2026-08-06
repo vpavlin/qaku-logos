@@ -21,6 +21,11 @@ export class Session {
   clock: any;
   device = "phone";
   listeners = new Set<() => void>();
+  // Posts authored here that haven't been confirmed on the fleet yet. A NAT'd phone's
+  // gossip mesh forms only in brief windows, so we re-publish these whenever the mesh
+  // has peers (driven by the 3s poll → flushPending) and drop one once it echoes back
+  // to us (= it reached the fleet). Bounded by a 5-min TTL.
+  private pending: { id: string; sealed: Uint8Array; ts: number }[] = [];
 
   async start(secret: Uint8Array, onStatus?: (s: string) => void) {
     this.device = await getDeviceId();
@@ -48,9 +53,15 @@ export class Session {
     return true;
   }
 
-  // Fold a decoded event (from live receive or store pull). Dedup by id.
+  // Fold a decoded event (from live receive or store pull). Dedup by id. If it's one
+  // of OUR pending posts echoing back off the fleet, stop re-publishing it — delivered.
   ingestEvent(event: any) {
     try {
+      if (event && event.id) {
+        const before = this.pending.length;
+        this.pending = this.pending.filter((p) => p.id !== event.id);
+        if (this.pending.length !== before) { /* our post reached the fleet */ }
+      }
       if (event && this.merge(event)) { counters.rxNew++; this.emit(); }
       else counters.rxDup++;
     } catch { /* malformed event */ }
@@ -65,19 +76,26 @@ export class Session {
     }
   }
 
-  // Author a local event: stamp HLC, merge, seal + publish. A NAT'd phone's gossip
-  // mesh prunes/reforms, so a single publish often falls into a mesh gap and never
-  // leaves. Re-publish the SAME sealed bytes a few times over ~40s to catch a
-  // momentary mesh; receivers dedup by event id so the repeats are harmless.
+  // Author a local event: stamp HLC, merge, seal, publish, and QUEUE it so it keeps
+  // getting re-published whenever the gossip mesh opens (flushPending) until it echoes
+  // back (confirmed on the fleet). This is what makes a NAT'd phone's posts actually
+  // leave — a single publish almost always falls into a mesh-pruned gap.
   async append(type: keyof typeof ev, payload: any) {
     const event = (ev as any)[type](this.clock.send(), payload);
     this.merge(event);
     this.emit();
     const sealed = sealEvent(encodeEvent(event));
+    this.pending.push({ id: event.id, sealed, ts: Date.now() });
     await publishSealed(sealed);
-    for (const delay of [6000, 18000, 40000]) {
-      setTimeout(() => { publishSealed(sealed).catch(() => {}); }, delay);
-    }
+  }
+
+  // Re-publish every un-confirmed post. Called from the UI poll ONLY when the mesh has
+  // peers (counters.mesh > 0), so this fires within ~3s of a mesh window opening.
+  // Drops posts older than 5 min (give up). Receivers dedup by id, so repeats are safe.
+  flushPending() {
+    const now = Date.now();
+    this.pending = this.pending.filter((p) => now - p.ts < 300000);
+    for (const p of this.pending) publishSealed(p.sealed).catch(() => {});
   }
 
   // Convenience domain actions (mirror the desktop core surface).

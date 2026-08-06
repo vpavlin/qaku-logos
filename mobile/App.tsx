@@ -92,7 +92,9 @@ function AppInner() {
   useEffect(() => {
     if (!joined) return;
     const t = setInterval(() => {
-      refreshPeerCount().catch(() => {});
+      refreshPeerCount()
+        .then(() => { if (counters.mesh > 0) session.flushPending(); }) // publish pending the instant the mesh opens
+        .catch(() => {});
       forceTick((n) => n + 1);
     }, 3000);
     return () => clearInterval(t);
