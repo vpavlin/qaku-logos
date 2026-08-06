@@ -47,8 +47,15 @@ export const ENTRY_NODES: string[] = [
   "/dns4/delivery-02.ac-cn-hongkong-c.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAkvwhGHKNry6LACrB8TmEFoCJKEX29XR5dDUzk3UT3UNSE",
 ];
 const FLEET_PRESET = "logos.dev";
-const SETTLE_MS = 10000;       // KYM SETTLE_MS
-const FILTER_RENEW_MS = 60000; // KYM FILTER_RENEW_MS
+const SETTLE_MS = 10000;         // KYM SETTLE_MS
+const FILTER_RENEW_MS = 60000;   // KYM FILTER_RENEW_MS
+const STORE_PAGE = 100;          // KYM STORE_PAGE
+const STORE_TIMEOUT_MS = 20000;  // KYM STORE_TIMEOUT_MS
+const STORE_MAX_PAGES = 25;      // KYM STORE_MAX_PAGES (25*100 = 2500 events/topic)
+let storeInfo = "";
+
+export function deliveryAvailable(): boolean { return !!LogosMessaging; }
+export function getStoreInfo(): string { return storeInfo; }
 
 let didSetup = false;
 let node: { ctx: string } | null = null;             // set AFTER settle, like KYM
@@ -176,25 +183,68 @@ export async function publishSealed(topic: string, sealed: Uint8Array): Promise<
   counters.txTotal++;
 }
 
-// KYM storeSync — history pull; hands each stored message's candidates to the app.
-export async function storeSync(topic: string, onCandidates: (topic: string, candidates: Uint8Array[]) => boolean): Promise<number> {
-  if (!node || typeof LogosMessaging.storeQuery !== "function") return 0;
-  let msgs = 0;
-  for (const peer of ENTRY_NODES) {
-    try {
-      const query = { requestId: `lt-${storeReqSeq++}`, contentTopics: [topic], includeData: true, paginationForward: true, paginationLimit: 100 };
-      const respStr: string = await LogosMessaging.storeQuery(node.ctx, JSON.stringify(query), peer, 8000);
-      if (!respStr || respStr.indexOf("{") !== 0) continue;
-      const res = JSON.parse(respStr);
-      const list: any[] = res.messages || res.Messages || res.messageData || [];
-      for (const mm of list) {
-        const wm = mm.message || mm.wakuMessage || mm;
-        if (onCandidates(topic, payloadCandidates(wm.payload))) msgs++;
-      }
-      if (msgs > 0) break;
-    } catch { /* try next peer */ }
+// Add topics after the node is up (KYM refreshRoutes) — subscribe+channelCreate each.
+export async function join(topics: string[]): Promise<void> {
+  if (!node) return;
+  for (const t of topics) if (!joinedTopics.has(t)) await joinRoute(node.ctx, t);
+}
+
+// Stop the node (KYM stopNode) — best-effort; keeps didSetup so a restart is cheap.
+export async function stop(): Promise<void> {
+  if (renewTimer) { clearInterval(renewTimer); renewTimer = null; }
+  joinedTopics.clear();
+  if (node && LogosMessaging) {
+    const c = node.ctx;
+    node = null;
+    try { await LogosMessaging.stop(c); } catch { /* ignore */ }
   }
-  return msgs;
+}
+
+// KYM storeSync — cursor-paged history pull over EVERY joined topic. Hands each stored
+// message's candidates to the app (which opens+folds) and returns {msgs, events, detail}.
+export async function storeSync(onCandidates: (topic: string, candidates: Uint8Array[]) => boolean): Promise<{ msgs: number; events: number; detail: string }> {
+  if (!node || typeof LogosMessaging.storeQuery !== "function") {
+    storeInfo = "store: bridge missing (rebuild app)";
+    return { msgs: 0, events: 0, detail: storeInfo };
+  }
+  const ctx = node.ctx;
+  let totalMsgs = 0, totalEvents = 0;
+  const parts: string[] = [];
+  for (const topic of joinedTopics) {
+    const label = topic.slice(7, 15); // short hex of the content topic
+    let cursor: any = undefined;
+    let topicMsgs = 0, topicEvents = 0, note = "";
+    for (let page = 0; page < STORE_MAX_PAGES; page++) {
+      const query: any = {
+        requestId: `lt-${storeReqSeq++}-${page}`, // MANDATORY — omitting it faults the FFI
+        contentTopics: [topic], includeData: true, paginationForward: true, paginationLimit: STORE_PAGE,
+      };
+      if (cursor) query.paginationCursor = cursor;
+      let respStr: string | null = null;
+      for (const peer of ENTRY_NODES) { // ask each fleet node until one answers this page
+        try { respStr = await LogosMessaging.storeQuery(ctx, JSON.stringify(query), peer, STORE_TIMEOUT_MS); if (respStr) break; }
+        catch { respStr = null; }
+      }
+      if (!respStr) { note = "no store peer answered"; break; }
+      if (respStr.indexOf("{") !== 0) { note = respStr.slice(0, 40); break; } // "on_response-ok" sentinel = empty
+      let resp: any;
+      try { resp = JSON.parse(respStr); } catch { note = `bad json: ${respStr.slice(0, 30)}`; break; }
+      const msgs: any[] = resp.messages || resp.Messages || resp.messageData || [];
+      topicMsgs += msgs.length;
+      for (const entry of msgs) {
+        const wm = entry.message || entry.wakuMessage || entry;
+        const payload = wm && wm.payload != null ? wm.payload : entry.payload;
+        if (payload == null) continue;
+        if (onCandidates(topic, payloadCandidates(payload))) topicEvents++;
+      }
+      cursor = resp.paginationCursor ?? resp.pagination_cursor ?? resp.cursor;
+      if (!cursor || msgs.length === 0) break; // last page
+    }
+    totalMsgs += topicMsgs; totalEvents += topicEvents;
+    parts.push(`${label}:${topicMsgs}m/${topicEvents}e${note ? `(${note})` : ""}`);
+  }
+  storeInfo = `store: ${totalMsgs} msg → ${totalEvents} ev  [${parts.join("  ")}]`;
+  return { msgs: totalMsgs, events: totalEvents, detail: storeInfo };
 }
 
 // KYM getPeerCount — sum ALL gossipsub-mesh gauges, parse shard(s), report peers/mesh.

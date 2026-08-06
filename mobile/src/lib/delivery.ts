@@ -65,7 +65,7 @@ export async function sendSyncReq(): Promise<void> {
 
 // Cold-start history pull: fold every stored EVENT for our topic.
 export async function storeSync(onEvent: OnEvent): Promise<number> {
-  return transport.storeSync(topic, (_topic, candidates) => {
+  const res = await transport.storeSync((_topic, candidates) => {
     for (const cand of candidates) {
       try {
         const env = JSON.parse(utf8Decode(open(identity!, cand, topic)));
@@ -75,6 +75,7 @@ export async function storeSync(onEvent: OnEvent): Promise<number> {
     }
     return false;
   });
+  return res.events;
 }
 
 export function getTopic(): string { return topic; }
