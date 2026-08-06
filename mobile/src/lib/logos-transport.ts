@@ -20,11 +20,11 @@ const emitter = LogosMessaging ? new NativeEventEmitter(LogosMessaging) : null;
 // app's open() outcome, reported back via onReceive's return value.
 export const counters = {
   rxRaw: 0, rxNoPayload: 0, rxSelfEcho: 0, rxSeen: 0,
-  rxOpened: 0, rxOpenFail: 0, rxNew: 0, rxDup: 0, txTotal: 0, peers: -1, mesh: -1,
+  rxOpened: 0, rxOpenFail: 0, rxNew: 0, rxDup: 0, txTotal: 0, txAttempt: 0, txFail: 0, peers: -1, mesh: -1,
 };
-export const diag = { chan: 0, msg: 0, err: 0, sample: "" };
+export const diag = { chan: 0, msg: 0, err: 0, sample: "", txErr: "" };
 export function getRxSample(): string {
-  return `chan:${diag.chan} msg:${diag.msg} err:${diag.err}${diag.sample ? " | " + diag.sample : ""}`;
+  return `chan:${diag.chan} msg:${diag.msg} err:${diag.err}${diag.sample ? " | " + diag.sample : ""}${diag.txErr ? " | txErr:" + diag.txErr : ""}`;
 }
 
 // Autoshard (RFC 51 gen-0) for a content topic — must match the C++ core's shardFor.
@@ -176,11 +176,18 @@ export async function start(opts: { deviceId: string; topics: string[]; onReceiv
 
 // KYM publishSealed (channel branch) — DOUBLE-base64 over the SDS reliable channel.
 export async function publishSealed(topic: string, sealed: Uint8Array): Promise<void> {
-  if (!node) return;
+  counters.txAttempt++;
+  if (!node) { diag.txErr = "node-null"; return; }
   const sealedB64 = fromByteArray(sealed);
   const doubled = fromByteArray(utf8(sealedB64));
-  await LogosMessaging.channelSend(node.ctx, topic, JSON.stringify({ payload: doubled, ephemeral: false }));
-  counters.txTotal++;
+  try {
+    await LogosMessaging.channelSend(node.ctx, topic, JSON.stringify({ payload: doubled, ephemeral: false }));
+    counters.txTotal++;
+  } catch (e: any) {
+    counters.txFail++;
+    diag.txErr = String((e && (e.message || e.code)) || e).slice(0, 140);
+    throw e;
+  }
 }
 
 // Add topics after the node is up (KYM refreshRoutes) — subscribe+channelCreate each.

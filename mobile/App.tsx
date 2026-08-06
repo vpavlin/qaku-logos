@@ -179,7 +179,7 @@ function AppInner() {
           ) : null}
           <View style={s.row}>
             <TextInput style={s.input} placeholder="Ask a question..." placeholderTextColor="#667" value={q} onChangeText={setQ} />
-            <TouchableOpacity style={s.btn} onPress={() => { session.ask(q); setQ(""); }}><Text style={s.btnT}>Ask</Text></TouchableOpacity>
+            <TouchableOpacity style={s.btn} onPress={() => { session.ask(q).catch(() => {}); setQ(""); }}><Text style={s.btnT}>Ask</Text></TouchableOpacity>
           </View>
           <ScrollView style={{ flex: 1 }}>
             {(state.questions || []).map((qq: any) => (
@@ -193,7 +193,8 @@ function AppInner() {
             <Text selectable style={s.syncT}>topic {getTopic() || "-"}</Text>
             <Text style={s.syncT}>shard {getShard()}   peers {counters.peers}   mesh {counters.mesh}{counters.mesh === 0 ? " (can't publish!)" : ""}</Text>
             <Text style={s.syncT}>rxRaw {counters.rxRaw} - noPayload {counters.rxNoPayload} - selfEcho {counters.rxSelfEcho} - seen {counters.rxSeen}</Text>
-            <Text style={s.syncT}>rxOpened {counters.rxOpened} - rxFail {counters.rxOpenFail} - rxNew {counters.rxNew} - tx {counters.txTotal}</Text>
+            <Text style={s.syncT}>rxOpened {counters.rxOpened} - rxFail {counters.rxOpenFail} - rxNew {counters.rxNew}</Text>
+            <Text selectable style={s.syncT}>tx {counters.txTotal} - txAttempt {counters.txAttempt} - txFail {counters.txFail}</Text>
             <Text selectable style={s.syncT}>{getRxSample()}</Text>
           </View>
         </>
