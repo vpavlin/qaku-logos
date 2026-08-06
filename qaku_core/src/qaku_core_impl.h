@@ -156,4 +156,9 @@ private:
 
     std::recursive_mutex m_mtx;
     QTimer* m_hubTimer = nullptr;
+    // Anti-storm throttles (ms since epoch of the last full-log re-serve). The
+    // periodic hub resync and on-demand SYNC_REQ both re-broadcast the whole log;
+    // without gating they amplified into a shard flood.
+    int64_t m_lastPeriodicReserveMs = 0;   // periodic (hub tick) — 60s min gap
+    int64_t m_lastSyncReserveMs = 0;       // SYNC_REQ driven — 3s min gap (still responsive)
 };

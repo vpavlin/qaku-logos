@@ -335,7 +335,14 @@ std::string QakuCoreImpl::snapshot() {
 }
 std::string QakuCoreImpl::resync() {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    if (m_nodeReady) for (auto& kv : m_sessions) if (kv.second.haveKey) for (auto& e : kv.second.log) sealAndSend(kv.second, e);
+    // PERIODIC re-broadcast (hub tick): rate-limited to once per 60s. Re-broadcasting
+    // the whole log every 15s from every peer amplified into a shard flood. SYNC_REQ
+    // (on-demand, below) covers a joining peer's catch-up; this is just a slow safety
+    // net for peers that missed live traffic.
+    if (m_nodeReady && nowMs() - m_lastPeriodicReserveMs >= 60000) {
+        m_lastPeriodicReserveMs = nowMs();
+        for (auto& kv : m_sessions) if (kv.second.haveKey) for (auto& e : kv.second.log) sealAndSend(kv.second, e);
+    }
     publishState(); return m_snapshot;
 }
 
@@ -555,14 +562,10 @@ void QakuCoreImpl::bootstrapDelivery() {
                 // so re-broadcast the whole log a FEW times over the first ~12s (KYM's
                 // seed-burst fix). Idempotent — peers dedup by id. Timers fire on the Qt
                 // thread; joinTransport must have run first (subscribe+channelCreate).
-                auto seed = [this]() {
-                    std::lock_guard<std::recursive_mutex> lk(m_mtx);
-                    if (!m_nodeReady) return;
-                    for (auto& kv : m_sessions) if (kv.second.haveKey) for (auto& e : kv.second.log) sealAndSend(kv.second, e);
-                };
-                seed();
-                QTimer::singleShot(4000, [seed]{ seed(); });
-                QTimer::singleShot(12000, [seed]{ seed(); });
+                // Seed the log ONCE on node-up (was a 3x burst — an amplifier). A
+                // joining peer pulls reliably via SYNC_REQ, so a single seed is enough;
+                // the periodic resync (rate-limited to 60s) is the slow safety net.
+                for (auto& kv : m_sessions) if (kv.second.haveKey) for (auto& e : kv.second.log) sealAndSend(kv.second, e);
                 publishState();
             });
         });
@@ -633,9 +636,13 @@ bool QakuCoreImpl::openAndPush(Session& s, const std::string& sealed) {
         const std::string type = o.value("type", "");
         if (type == "SYNC_REQ") {
             // Re-serve the whole log (idempotent — peers dedup by id). Ignore our own
-            // request echoed back. This is the "serve" half of the pull protocol.
-            if (o.value("from", "") != m_deviceId)
+            // request echoed back. Debounced to 3s so a reconnecting peer spamming
+            // SYNC_REQ can't restack full re-serves into a flood, while still being
+            // responsive for a genuine join.
+            if (o.value("from", "") != m_deviceId && nowMs() - m_lastSyncReserveMs >= 3000) {
+                m_lastSyncReserveMs = nowMs();
                 for (auto& e : s.log) sealAndSend(s, e);
+            }
             return true;
         }
         if (type == "EVENT" && o.contains("event")) {
