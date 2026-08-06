@@ -97,11 +97,10 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?:
     step("1/6 loading native libs…");
     if (!didSetup) { await LogosMessaging.setup(); didSetup = true; }
     step("2/6 creating node…");
-    // relay for the gossip mesh (when it forms) AND lightpush so a NAT'd phone that
-    // can't hold a mesh can still PUBLISH via a fleet service node (the send_service's
-    // lightpush_processor). Without lightpush:true, logosdelivery_send only relays and
-    // dies with "NoPeersToPublish" whenever the mesh is pruned — the send wall.
-    ctx = await LogosMessaging.new({ mode: "Core", preset: FLEET_PRESET, relay: true, lightpush: true, entryNodes: ENTRY_NODES });
+    // EXACTLY KYM's config: a RELAY node, no light-client fields. (KYM: "the
+    // light-client fields (filter/lightpush/store) are what made waku_new reject the
+    // config → offline. Don't add them back.")
+    ctx = await LogosMessaging.new({ mode: "Core", preset: FLEET_PRESET, relay: true, entryNodes: ENTRY_NODES });
     step("3/6 starting node…");
     await LogosMessaging.start(ctx);
     // All receives (live relay + SDS channel) arrive on this one JS event. The
@@ -203,22 +202,14 @@ function payloadCandidates(payload: any): Uint8Array[] {
 }
 
 // Publish one sealed event via BOTH paths (receivers dedup by event id):
-//  1. channelSend — SDS reliable channel, DOUBLE-base64 (relay-gossip; only reaches
-//     the fleet when this node holds a relay mesh — the desktop/hub case).
-//  2. send — the high-level logosdelivery_send, SINGLE-base64. This LIGHTPUSHES when
-//     the node has no relay mesh, which is the MOBILE case: a phone behind NAT can't
-//     hold a gossip mesh (its relay streams get pruned — "yamux Stream Closed"), so
-//     channelSend goes nowhere. Lightpush hands the message to a fleet service node
-//     that relays it on the shard, where desktop peers receive it via onMessageReceived.
-// Sending both is belt-and-suspenders: whichever transport this node actually has,
-// the event gets out. Each is isolated so one failing path can't block the other.
+// EXACTLY KYM's channel send path: DOUBLE-base64 over the SDS reliable channel. The
+// FFI base64-decodes `payload` once, so base64(utf8Bytes(sealedB64)) puts the base64
+// text bytes on the SDS wire; the receive side double-decodes to reach the sealed
+// bytes. No raw-send fallback (KYM doesn't have one).
 export async function publishSealed(sealed: Uint8Array): Promise<void> {
   const sealedB64 = fromByteArray(sealed);
   const doubled = fromByteArray(utf8(sealedB64));
-  try { await LogosMessaging.channelSend(ctx, topic, JSON.stringify({ payload: doubled, ephemeral: false })); }
-  catch (e) { /* no relay mesh — lightpush below carries it */ }
-  try { await LogosMessaging.send(ctx, JSON.stringify({ contentTopic: topic, payload: sealedB64, ephemeral: false })); }
-  catch (e) { /* lightpush unavailable — channel above may have carried it */ }
+  await LogosMessaging.channelSend(ctx, topic, JSON.stringify({ payload: doubled, ephemeral: false }));
   counters.txTotal++;
 }
 
