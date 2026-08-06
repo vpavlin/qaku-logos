@@ -39,12 +39,13 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?:
   identity = deriveIdentity(secret);
   topic = topicFor(identity);
   deviceId = await getDeviceId();
-  await transport.startNode({
+  // One call = KYM's ensureNode flow (setup→new→start→subscribe+channelCreate→settle→renew).
+  await transport.start({
     deviceId,
+    topics: [topic],
     onStatus,
     onReceive: (_topic, candidates) => openAndDispatch(candidates, onEvent, onSyncReq),
   });
-  await transport.join(topic, onStatus);
 }
 
 // Seal an event's wire bytes / open sealed bytes with qaku's household key.
