@@ -24,8 +24,9 @@ import { getDeviceId } from "./device";
 const { LogosMessaging } = NativeModules as any;
 const emitter = new NativeEventEmitter(LogosMessaging);
 
-const utf8 = (s: string) => new TextEncoder().encode(s);
-const fromUtf8 = (b: Uint8Array) => new TextDecoder().decode(b);
+// Hermes-safe utf8 (KYM_TRANSPORT_SPEC L4) — NOT TextEncoder/TextDecoder, which may
+// throw on Hermes and silently break the payload double-peel → "invalid tag".
+import { utf8Bytes as utf8, utf8Decode as fromUtf8 } from "./utf8";
 
 // Per-stage diagnostic counters (surface these in the UI Sync card). rxRaw splits
 // into rxNoPayload (event had no payload field) + rxSelfEcho (our own senderId) +

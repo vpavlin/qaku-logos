@@ -11,7 +11,8 @@ import { sha256 } from "@noble/hashes/sha256";
 import { chacha20poly1305 } from "@noble/ciphers/chacha";
 import { randomBytes } from "@noble/hashes/utils";
 
-const enc = (s: string) => new TextEncoder().encode(s);
+import { utf8Bytes } from "./utf8"; // Hermes-safe (KYM_TRANSPORT_SPEC L4)
+const enc = (s: string) => utf8Bytes(s);
 const HEXC = "0123456789abcdef";
 const hex = (b: Uint8Array) => { let s = ""; for (const x of b) s += HEXC[x >> 4] + HEXC[x & 15]; return s; };
 
