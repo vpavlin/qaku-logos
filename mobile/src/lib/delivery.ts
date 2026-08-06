@@ -97,7 +97,11 @@ export async function startNode(secret: Uint8Array, onEvent: OnEvent, onStatus?:
     step("1/6 loading native libs…");
     if (!didSetup) { await LogosMessaging.setup(); didSetup = true; }
     step("2/6 creating node…");
-    ctx = await LogosMessaging.new({ mode: "Core", preset: FLEET_PRESET, relay: true, entryNodes: ENTRY_NODES });
+    // relay for the gossip mesh (when it forms) AND lightpush so a NAT'd phone that
+    // can't hold a mesh can still PUBLISH via a fleet service node (the send_service's
+    // lightpush_processor). Without lightpush:true, logosdelivery_send only relays and
+    // dies with "NoPeersToPublish" whenever the mesh is pruned — the send wall.
+    ctx = await LogosMessaging.new({ mode: "Core", preset: FLEET_PRESET, relay: true, lightpush: true, entryNodes: ENTRY_NODES });
     step("3/6 starting node…");
     await LogosMessaging.start(ctx);
     // All receives (live relay + SDS channel) arrive on this one JS event. The
