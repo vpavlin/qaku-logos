@@ -9,7 +9,13 @@ import { hkdf } from "@noble/hashes/hkdf";
 import { hmac } from "@noble/hashes/hmac";
 import { sha256 } from "@noble/hashes/sha256";
 import { chacha20poly1305 } from "@noble/ciphers/chacha";
-import { randomBytes } from "@noble/hashes/utils";
+import * as Crypto from "expo-crypto";
+// Hermes-safe RNG. @noble/hashes `randomBytes` needs `crypto.getRandomValues`, which
+// Hermes does NOT provide unless polyfilled — so it threw inside seal()'s nonce on
+// EVERY publish (open()/receive never calls it, which is why receive worked but tx
+// stayed 0 with no visible error). expo-crypto's getRandomBytes is synchronous and
+// needs no polyfill; KYM's identity.ts uses exactly this.
+const randomBytes = (n: number): Uint8Array => Crypto.getRandomBytes(n);
 
 import { utf8Bytes } from "./utf8"; // Hermes-safe (KYM_TRANSPORT_SPEC L4)
 const enc = (s: string) => utf8Bytes(s);
