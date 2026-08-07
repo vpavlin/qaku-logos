@@ -154,6 +154,23 @@ Item {
     function shortAddr(a) { return (a && a.length > 12) ? (a.substring(0, 6) + "…" + a.substring(a.length - 4)) : (a || ""); }
     function hueFor(a) { var h = 0; a = a || ""; for (var i = 2; i < Math.min(a.length, 10); i++) h = (h * 31 + a.charCodeAt(i)) % 360; return h; }
 
+    // ---- sort / filter / hidden (OG qaku parity) ----
+    property string sortBy: "top"      // top | new | old
+    property string filterBy: "all"    // all | unanswered | answered
+    property bool hiddenOpen: false
+    function answeredOf(q) { return (q.answers && q.answers.length > 0) || (q.acceptedAnswerId ? true : false); }
+    readonly property var visibleQuestions: {
+        var qs = root.questions.filter(function (x) { return !x.moderated; });
+        if (root.filterBy === "unanswered") qs = qs.filter(function (x) { return !root.answeredOf(x); });
+        else if (root.filterBy === "answered") qs = qs.filter(function (x) { return root.answeredOf(x); });
+        qs = qs.slice();
+        if (root.sortBy === "new") qs.sort(function (a, b) { return b.ts - a.ts; });
+        else if (root.sortBy === "old") qs.sort(function (a, b) { return a.ts - b.ts; });
+        else qs.sort(function (a, b) { return (b.upvotes || 0) - (a.upvotes || 0) || a.ts - b.ts; });
+        return qs;
+    }
+    readonly property var hiddenQuestions: root.questions.filter(function (x) { return x.moderated; })
+
     // ---- toast (mutation errors surfaced instead of swallowed) ----
     property string toastText: ""
     Timer { id: toastTimer; interval: 3200; onTriggered: root.toastText = "" }
@@ -685,6 +702,41 @@ Item {
                     }
                 }
 
+                // ---- sort / filter controls (OG qaku) ----
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.spacing.medium
+                    RowLayout {
+                        spacing: Theme.spacing.tiny
+                        LogosText { text: "Sort"; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                        Repeater {
+                            model: [{ k: "top", l: "Top" }, { k: "new", l: "New" }, { k: "old", l: "Old" }]
+                            delegate: Rectangle {
+                                radius: 14; implicitHeight: 28; implicitWidth: sortChipTxt.implicitWidth + 22
+                                color: modelData.k === root.sortBy ? root.qkGold : root.qkSurface
+                                border.color: root.qkBorder; border.width: 1
+                                LogosText { id: sortChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.secondaryText; color: modelData.k === root.sortBy ? root.qkBg : root.qkMuted }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.sortBy = modelData.k }
+                            }
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                    RowLayout {
+                        spacing: Theme.spacing.tiny
+                        LogosText { text: "Show"; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                        Repeater {
+                            model: [{ k: "all", l: "All" }, { k: "unanswered", l: "Unanswered" }, { k: "answered", l: "Answered" }]
+                            delegate: Rectangle {
+                                radius: 14; implicitHeight: 28; implicitWidth: filterChipTxt.implicitWidth + 22
+                                color: modelData.k === root.filterBy ? root.qkGold : root.qkSurface
+                                border.color: root.qkBorder; border.width: 1
+                                LogosText { id: filterChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.secondaryText; color: modelData.k === root.filterBy ? root.qkBg : root.qkMuted }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.filterBy = modelData.k }
+                            }
+                        }
+                    }
+                }
+
                 // ---- Questions ----
                 ListView {
                     id: qList
@@ -692,14 +744,52 @@ Item {
                     Layout.fillHeight: true
                     clip: true
                     spacing: Theme.spacing.small
-                    model: root.questions
+                    model: root.visibleQuestions
 
                     LogosText {
                         anchors.centerIn: parent
                         visible: qList.count === 0
-                        text: "No questions yet - be the first to ask"
+                        text: root.questions.length === 0 ? "No questions yet - be the first to ask" : "No questions match this filter"
                         color: Theme.palette.textTertiary
                         font.pixelSize: Theme.typography.primaryText
+                    }
+
+                    // ---- collapsed Hidden section (moderated questions) ----
+                    footer: Column {
+                        width: qList.width
+                        spacing: Theme.spacing.small
+                        topPadding: Theme.spacing.medium
+                        visible: root.hiddenQuestions.length > 0
+                        Rectangle { width: parent.width; height: 1; color: root.qkBorder }
+                        Item {
+                            width: parent.width; height: 34
+                            LogosText { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                                text: (root.hiddenOpen ? "▾" : "▸") + "  Hidden (" + root.hiddenQuestions.length + ")"
+                                color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightMedium }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.hiddenOpen = !root.hiddenOpen }
+                        }
+                        Repeater {
+                            model: root.hiddenOpen ? root.hiddenQuestions : []
+                            delegate: Rectangle {
+                                width: qList.width; radius: Theme.spacing.radiusSmall
+                                color: root.qkSurface; border.color: root.qkBorder; border.width: 1; opacity: 0.65
+                                implicitHeight: hcol.implicitHeight + 2 * Theme.spacing.small
+                                Column {
+                                    id: hcol
+                                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: Theme.spacing.small
+                                    spacing: 3
+                                    LogosText { width: parent.width; text: modelData.content || ""; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; wrapMode: Text.WordWrap }
+                                    Row {
+                                        width: parent.width; spacing: Theme.spacing.small
+                                        LogosText { text: root.shortAddr(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                                        Item { width: parent.width - 160; height: 1 }
+                                        LogosText { visible: root.isAdmin; text: "Unhide"; color: root.qkTeal; font.pixelSize: Theme.typography.secondaryText
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.act("moderate", [modelData.id, "false"], "Could not unhide") }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     delegate: Rectangle {
