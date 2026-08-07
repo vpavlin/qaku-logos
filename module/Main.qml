@@ -418,26 +418,35 @@ Item {
                     Layout.fillWidth: true
                     spacing: Theme.spacing.tiny
                     LogosText {
-                        text: "SETTINGS"
+                        text: "YOUR IDENTITY"
                         color: Theme.palette.textTertiary
                         font.pixelSize: Theme.typography.badgeText
                         font.weight: Theme.typography.weightMedium
                     }
+                    // The signing address (from sign.key) — read-only. NOT editable: this is
+                    // your cryptographic identity, and it's what an owner adds to make you an
+                    // admin. Copy it; don't type over it.
+                    LogosText {
+                        Layout.fillWidth: true
+                        text: root.st.address || root.st.deviceId || ""
+                        color: root.qkTeal
+                        font.pixelSize: Theme.typography.badgeText
+                        font.family: "monospace"
+                        wrapMode: Text.WrapAnywhere
+                    }
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: Theme.spacing.small
-                        AppField {
-                            id: deviceField
+                        LogosText {
                             Layout.fillWidth: true
-                            implicitHeight: 34
-                            placeholderText: "Your device name"
-                            text: root.st.deviceId || ""
+                            text: "Share this address to be added as an admin"
+                            color: root.qkMuted
+                            font.pixelSize: Theme.typography.badgeText
                         }
                         LogosButton {
-                            text: "Save"
-                            implicitWidth: 64; implicitHeight: 34
-                            enabled: deviceField.text.length > 0 && deviceField.text !== root.st.deviceId
-                            onClicked: root.act("setDeviceId", [deviceField.text], "Could not set device name")
+                            text: "Copy"
+                            implicitWidth: 64; implicitHeight: 30
+                            onClicked: { clip.text = root.st.address || root.st.deviceId || ""; clip.selectAll(); clip.copy(); root.toast("Identity address copied"); }
                         }
                     }
                 }
