@@ -1,0 +1,193 @@
+// QAKU multi-session manager: ONE embedded node, N Q&As. Each joined Q&A ("room") has
+// its own shared secret → seal/open key + derived content topic + event log; they all
+// ride the shared logos-transport (multi-topic). This is qaku's analogue of KYM's
+// multi-budget: a registry of joined rooms, per-room fold, and authoring that SIGNS with
+// this device's key (verifiable author) and SEALS with the room's household key.
+import * as transport from "./logos-transport";
+import { deriveIdentity, topicFor, seal, open, newSecret, Identity as SealId } from "./crypto";
+import { encodeEvent } from "./wire";
+import { utf8Bytes, utf8Decode } from "./utf8";
+import { getDeviceId } from "./device";
+import { getIdentity, Identity, shortAddr } from "./identity";
+// @ts-ignore - shared reference implementation (metro resolves the relative .mjs)
+import { computeState } from "../../../packages/engine/src/engine.mjs";
+// @ts-ignore
+import { Clock, ev } from "../../../packages/contract/src/index.mjs";
+// @ts-ignore
+import { signEvent } from "../../../packages/contract/src/identity.mjs";
+import * as SecureStore from "expo-secure-store";
+
+const HEXC = "0123456789abcdef";
+const hex = (b: Uint8Array) => { let s = ""; for (const x of b) s += HEXC[x >> 4] + HEXC[x & 15]; return s; };
+const fromHex = (s: string) => { const a = new Uint8Array(s.length / 2); for (let i = 0; i < a.length; i++) a[i] = parseInt(s.substr(i * 2, 2), 16); return a; };
+const rid = () => Math.random().toString(16).slice(2, 14);
+const REG_KEY = "qaku-rooms-v1";
+
+export type RoomMeta = { topicHash: string; secretHex: string; title: string };
+type Room = { meta: RoomMeta; sealId: SealId; topic: string; log: any[]; ids: Set<string>; clock: any };
+
+// The shareable pairing artifact — same secret-in-URL model as OG qaku.
+export const shareUriFor = (secretHex: string) => "qaku://join?s=" + secretHex;
+export function extractSecret(input: string): string {
+  const s = (input || "").trim();
+  const i = s.indexOf("s=");
+  return s.startsWith("qaku://") && i >= 0 ? s.slice(i + 2).trim() : s;
+}
+
+export class Sessions {
+  private rooms = new Map<string, Room>();   // topic -> Room
+  private byHash = new Map<string, Room>();   // topicHash -> Room
+  private identity: Identity | null = null;
+  private deviceId = "";
+  started = false;
+  myAddress = "";
+  listeners = new Set<() => void>();
+
+  subscribe(fn: () => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
+  private emit() { for (const fn of this.listeners) fn(); }
+
+  // --- registry persistence (secrets live here; the secret IS the access) ---
+  private async loadRegistry(): Promise<RoomMeta[]> {
+    try { const raw = await SecureStore.getItemAsync(REG_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
+  }
+  private async saveRegistry() {
+    const metas = [...this.byHash.values()].map((r) => r.meta);
+    try { await SecureStore.setItemAsync(REG_KEY, JSON.stringify(metas)); } catch { /* */ }
+  }
+
+  private makeRoom(meta: RoomMeta): Room {
+    const sealId = deriveIdentity(fromHex(meta.secretHex));
+    const topic = topicFor(sealId);
+    return { meta: { ...meta, topicHash: topic.split("/")[3] || meta.topicHash }, sealId, topic, log: [], ids: new Set(), clock: new Clock(this.myAddress) };
+  }
+
+  // Bring the node up on every joined room's topic; then pull history + ask peers.
+  async start(onStatus?: (s: string) => void) {
+    this.identity = await getIdentity();
+    this.myAddress = this.identity.address;
+    this.deviceId = await getDeviceId();
+    for (const meta of await this.loadRegistry()) {
+      const room = this.makeRoom(meta);
+      this.rooms.set(room.topic, room); this.byHash.set(room.meta.topicHash, room);
+    }
+    const topics = [...this.rooms.keys()];
+    await transport.start({ deviceId: this.deviceId, topics, onStatus, onReceive: (t, c) => this.onCandidates(t, c) });
+    this.started = true;
+    this.emit();
+    for (const room of this.rooms.values()) this.syncRoom(room);
+  }
+
+  private syncRoom(room: Room) {
+    this.sendSyncReq(room).catch(() => {});
+    transport.storeSync((t, cands) => this.onCandidates(t, cands)).then(() => this.emit()).catch(() => {});
+  }
+
+  // Route an inbound payload to the room owning that topic; open with the room key; fold.
+  private onCandidates(topic: string, candidates: Uint8Array[]): boolean {
+    const room = this.rooms.get(topic);
+    if (!room) return false;
+    for (const cand of candidates) {
+      let plain: Uint8Array;
+      try { plain = open(room.sealId, cand, room.topic); } catch { continue; }
+      try {
+        const envlp = JSON.parse(utf8Decode(plain));
+        if (envlp && envlp.type === "EVENT" && envlp.event) this.ingest(room, envlp.event);
+        else if (envlp && envlp.type === "SYNC_REQ") this.serveLog(room, typeof envlp.from === "string" ? envlp.from : "");
+      } catch { /* opened but not an envelope */ }
+      return true;
+    }
+    return false;
+  }
+
+  private ingest(room: Room, event: any) {
+    if (!event || room.ids.has(event.id)) return;
+    room.log = [...room.log, event];
+    room.ids.add(event.id);
+    try { room.clock.receive(event.hlc); } catch { /* */ }
+    this.emit();
+  }
+
+  private async publish(room: Room, envObj: any) {
+    const sealed = seal(room.sealId, utf8Bytes(JSON.stringify(envObj)), room.topic);
+    await transport.publishSealed(room.topic, sealed);
+  }
+  private async sendSyncReq(room: Room) {
+    await this.publish(room, { v: 1, type: "SYNC_REQ", from: this.deviceId }).catch(() => {});
+  }
+  private serveLog(room: Room, from: string) {
+    if (from && from === this.deviceId) return;
+    for (const e of room.log) this.publish(room, { v: 1, type: "EVENT", event: e }).catch(() => {});
+  }
+
+  // Author a signed event into a room: stamp HLC → sign (author=our address) → fold →
+  // seal + publish. Returns immediately after local fold; publish is best-effort async.
+  private async append(room: Room, type: string, payload: any) {
+    if (!this.identity) return;
+    const event = (ev as any)[type](room.clock.send(), payload);
+    signEvent(this.identity, event);
+    this.ingest(room, event);
+    await this.publish(room, { v: 1, type: "EVENT", event }).catch(() => {});
+  }
+
+  // --- public API ---------------------------------------------------------
+  async createRoom(title: string): Promise<string> {
+    const secret = newSecret();
+    const room = this.makeRoom({ topicHash: "", secretHex: hex(secret), title: title || "New Q&A" });
+    this.rooms.set(room.topic, room); this.byHash.set(room.meta.topicHash, room);
+    await this.saveRegistry();
+    if (this.started) await transport.join([room.topic]);
+    // Author the session.create (owner = us) + our current name, then sync.
+    await this.append(room, "sessionCreate", { sessionId: room.meta.topicHash, title: room.meta.title, description: "" });
+    this.emit();
+    if (this.started) this.syncRoom(room);
+    return room.meta.topicHash;
+  }
+
+  async joinRoom(secretInput: string): Promise<string> {
+    const sh = extractSecret(secretInput).toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(sh)) throw new Error("Secret must be 64 hex chars or a qaku://join link.");
+    const room = this.makeRoom({ topicHash: "", secretHex: sh, title: "Q&A" });
+    if (this.byHash.has(room.meta.topicHash)) return room.meta.topicHash; // already joined
+    this.rooms.set(room.topic, room); this.byHash.set(room.meta.topicHash, room);
+    await this.saveRegistry();
+    if (this.started) { await transport.join([room.topic]); this.syncRoom(room); }
+    this.emit();
+    return room.meta.topicHash;
+  }
+
+  async leaveRoom(topicHash: string) {
+    const room = this.byHash.get(topicHash); if (!room) return;
+    this.rooms.delete(room.topic); this.byHash.delete(topicHash);
+    await this.saveRegistry(); this.emit();
+  }
+
+  // Set our display name in EVERY joined room (bound to our address, signed).
+  async setName(name: string) {
+    for (const room of this.rooms.values()) await this.append(room, "profileSet", { name });
+    this.emit();
+  }
+  async currentName(topicHash: string): Promise<string> {
+    const st = this.state(topicHash); return (st.names && st.names[this.myAddress]) || "";
+  }
+
+  ask(h: string, content: string) { const r = this.byHash.get(h); return r ? this.append(r, "questionAdd", { questionId: rid(), content }) : Promise.resolve(); }
+  upvote(h: string, targetId: string, up = true) { const r = this.byHash.get(h); return r ? this.append(r, "upvote", { targetId, up }) : Promise.resolve(); }
+  postAnswer(h: string, questionId: string, content: string) { const r = this.byHash.get(h); return r ? this.append(r, "answerPost", { answerId: rid(), questionId, content }) : Promise.resolve(); }
+  moderate(h: string, questionId: string, hidden: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "moderate", { questionId, hidden }) : Promise.resolve(); }
+
+  state(topicHash: string): any {
+    const r = this.byHash.get(topicHash); if (!r) return { questions: [], polls: [], names: {} };
+    return computeState(r.log);
+  }
+  secretHex(topicHash: string): string { return this.byHash.get(topicHash)?.meta.secretHex || ""; }
+  isAdmin(topicHash: string): boolean { const st = this.state(topicHash); return !!(st.admins && st.admins.indexOf(this.myAddress) >= 0); }
+  displayName(topicHash: string, addr: string): string { const st = this.state(topicHash); return (st.names && st.names[addr]) || shortAddr(addr); }
+
+  // Room list for the home screen: title + question count + open/closed.
+  list(): { topicHash: string; title: string; questions: number; owned: boolean }[] {
+    return [...this.byHash.values()].map((r) => {
+      const st = computeState(r.log);
+      return { topicHash: r.meta.topicHash, title: (st.session && st.session.title) || r.meta.title, questions: (st.questions || []).length, owned: st.owner === this.myAddress };
+    });
+  }
+}
