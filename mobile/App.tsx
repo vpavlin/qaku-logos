@@ -41,6 +41,20 @@ export default function App() {
   return <ErrorBoundary><AppInner /></ErrorBoundary>;
 }
 
+// Relative time ("just now" / "5m" / "3h" / "2d") falling back to an absolute date.
+function timeAgo(ts: number): string {
+  if (!ts) return "";
+  const m = Math.floor((Date.now() - ts) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h";
+  const d = Math.floor(h / 24);
+  if (d < 7) return d + "d";
+  return new Date(ts).toLocaleDateString();
+}
+function fullTime(ts: number): string { return ts ? new Date(ts).toLocaleString() : ""; }
+
 function Avatar({ addr, name, size = 28 }: { addr: string; name?: string; size?: number }) {
   // deterministic hue from the address; initial = first letter of name or "0x".
   let h = 0; for (let i = 2; i < Math.min(addr.length, 10); i++) h = (h * 31 + addr.charCodeAt(i)) % 360;
@@ -214,11 +228,12 @@ function AppInner() {
           <Avatar addr={qq.author} name={nameOf(qq.author)} size={18} />
           <Text style={s.bylineName} numberOfLines={1}>{nameOf(qq.author)}</Text>
           {qq.verified ? <Text style={s.verified}>✓</Text> : null}
+          <Text style={s.time} numberOfLines={1}>· {timeAgo(qq.ts)}</Text>
         </View>
         {(qq.answers || []).map((a: any) => (
           <View key={a.id} style={s.answer}>
             <Text style={[s.answerText, a.accepted && { color: C.accent }]}>{a.accepted ? "✓ " : "↳ "}{a.content}</Text>
-            <View style={s.byline}><Text style={s.bylineName}>{nameOf(a.author)}</Text>{a.verified ? <Text style={s.verified}>✓</Text> : null}</View>
+            <View style={s.byline}><Text style={s.bylineName}>{nameOf(a.author)}</Text>{a.verified ? <Text style={s.verified}>✓</Text> : null}<Text style={s.time}>· {timeAgo(a.ts)}</Text></View>
           </View>
         ))}
         {admin && (answering === qq.id ? (
@@ -380,8 +395,9 @@ const s = StyleSheet.create({
   upvoteN: { color: C.text, fontWeight: "800", fontSize: 15 },
   qText: { color: C.text, fontSize: 15, lineHeight: 20 },
   byline: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
-  bylineName: { color: C.muted, fontSize: 12, maxWidth: 160 },
+  bylineName: { color: C.muted, fontSize: 12, maxWidth: 140 },
   verified: { color: C.accent, fontSize: 12, fontWeight: "800" },
+  time: { color: C.muted, fontSize: 11, opacity: 0.8 },
   answer: { marginTop: 8, paddingLeft: 10, borderLeftWidth: 2, borderLeftColor: C.border },
   answerText: { color: "#d8d8e0", fontSize: 14, lineHeight: 19 },
   answerRow: { flexDirection: "row", gap: 8, marginTop: 8 },

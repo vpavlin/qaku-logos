@@ -1,7 +1,7 @@
 {
   "name": "qaku",
   "display_name": "QAKU - Q&A",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "type": "ui_qml",
   "category": "social",
   "description": "Local-first, multi-writer Q&A. Sessions, questions, per-voter upvotes, owner answers and moderation, and polls - all computed by a conflict-free, append-only event-log engine (the same engine the mobile app and hub fold). Pure-QML view over the qaku_core module.",

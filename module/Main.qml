@@ -153,6 +153,17 @@ Item {
     readonly property color qkMuted: "#9f9fab"
     function shortAddr(a) { return (a && a.length > 12) ? (a.substring(0, 6) + "…" + a.substring(a.length - 4)) : (a || ""); }
     function hueFor(a) { var h = 0; a = a || ""; for (var i = 2; i < Math.min(a.length, 10); i++) h = (h * 31 + a.charCodeAt(i)) % 360; return h; }
+    function timeAgo(ts) {
+        if (!ts) return "";
+        var mins = Math.floor((Date.now() - ts) / 60000);
+        if (mins < 1) return "just now";
+        if (mins < 60) return mins + "m";
+        var hrs = Math.floor(mins / 60);
+        if (hrs < 24) return hrs + "h";
+        var days = Math.floor(hrs / 24);
+        if (days < 7) return days + "d";
+        return Qt.formatDate(new Date(ts), "d MMM");
+    }
 
     // ---- sort / filter / hidden (OG qaku parity) ----
     property string sortBy: "top"      // top | new | old
@@ -844,6 +855,7 @@ Item {
                                             LogosText { anchors.centerIn: parent; text: (modelData.author && modelData.author.length > 2) ? modelData.author.charAt(2).toUpperCase() : "?"; color: root.qkText; font.pixelSize: 9; font.weight: Theme.typography.weightBold }
                                         }
                                         LogosText { text: root.shortAddr(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                                        LogosText { text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; opacity: 0.85 }
                                     }
                                 }
 
