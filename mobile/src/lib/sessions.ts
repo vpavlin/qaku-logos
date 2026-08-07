@@ -135,10 +135,10 @@ export class Sessions {
   // app foreground — a single SYNC_REQ can race a still-forming mesh, which is how a
   // question posted from Basecamp while the phone was offline got missed on reconnect.
   private lastResync = 0;
-  async resync() {
+  async resync(force = false) {
     if (!this.started) return;
     const now = Date.now();
-    if (now - this.lastResync < 4000) return;               // coalesce rapid triggers
+    if (!force && now - this.lastResync < 4000) return;     // coalesce rapid triggers (force = pull-to-refresh)
     this.lastResync = now;
     for (const room of this.rooms.values()) { this.sendSyncReq(room).catch(() => {}); this.seedRoom(room); }
     try { await transport.storeSync((t, cands) => this.onCandidates(t, cands)); this.emit(); } catch { /* */ }

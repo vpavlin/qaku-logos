@@ -3,7 +3,7 @@
 // with optional display names; a small collapsible sync line keeps the diagnostics out
 // of the way. Palette = the original qaku (dark + gold primary + teal accent).
 import React, { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState } from "react-native";
+import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState, RefreshControl } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
 import { Sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
@@ -81,7 +81,15 @@ function AppInner() {
   const [nameModal, setNameModal] = useState(false);
   const [nameText, setNameText] = useState("");
   const [showDiag, setShowDiag] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
+
+  // Pull-to-refresh → force a full catch-up round (past the rate-limit).
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try { await sessions.resync(true); } catch { /* */ }
+    setTimeout(() => setRefreshing(false), 900);
+  };
 
   useEffect(() => {
     const un = sessions.subscribe(scheduleForce);
@@ -146,7 +154,7 @@ function AppInner() {
           </TouchableOpacity>
         </View>
         <Text style={s.section}>Your Q&As</Text>
-        <ScrollView style={{ flex: 1 }}>
+        <ScrollView style={{ flex: 1 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} colors={[C.primary]} progressBackgroundColor={C.surface} />}>
           {rooms.length === 0 ? <Text style={s.empty}>No Q&As yet. Create one, or join with a secret / QR.</Text> : null}
           {rooms.map((r) => (
             <TouchableOpacity key={r.topicHash} style={s.roomCard} onPress={() => setOpenHash(r.topicHash)}>
@@ -253,7 +261,7 @@ function AppInner() {
           ))}
         </View>
       </View>
-      <ScrollView style={{ flex: 1 }}>
+      <ScrollView style={{ flex: 1 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} colors={[C.primary]} progressBackgroundColor={C.surface} />}>
         {shownQ.length === 0 ? <Text style={s.empty}>{allQ.length === 0 ? "No questions yet — be the first to ask." : "Nothing matches this filter."}</Text> : null}
         {shownQ.map(renderQ)}
         {hiddenQ.length > 0 ? (
