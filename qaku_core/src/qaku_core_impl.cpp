@@ -525,21 +525,27 @@ void QakuCoreImpl::bootstrapDelivery() {
             if (!p.empty()) ingestPayload(channelId, p, /*channelPath=*/true);
         });
     setStatus("Connecting...");
-    // RELAY node with the logos.dev fleet entry nodes PINNED. Bare
-    // {mode:Core,preset:logos.dev} gives ZERO bootstrap nodes ("seed node, no
-    // bootstrap") — the node drifts off the fleet, joins no shard mesh, and logs
-    // "No peers for topic"/"NoPeersToPublish": it prints "Connected" (start() ok)
-    // but publishes/receives NOTHING. The phone pins these same 6 nodes and meshes;
-    // the desktop must too or the two never meet. (Same fix the KYM hub needed.)
+    // RELAY node with the logos.test fleet entry nodes PINNED. Bare
+    // {mode:Core,preset:...} gives ZERO bootstrap nodes ("seed node, no bootstrap") —
+    // the node drifts off the fleet, joins no shard mesh, and logs "No peers for topic"/
+    // "NoPeersToPublish": it prints "Connected" (start() ok) but publishes/receives
+    // NOTHING. The phone pins these same 6 nodes and meshes; the desktop must too or the
+    // two never meet.
+    //
+    // FLEET = logos.test (cluster 2). We were on logos.dev, but logos.dev migrated to
+    // CLUSTER 3 while liblogosdelivery's baked preset still maps logos.dev→cluster 2 — so
+    // a fresh node dialed the now-cluster-3 boxes with cluster-2 config and never meshed.
+    // logos.test stays cluster 2, keeping qaku's shard (sha256("qaku"+"1") % 8 = 0) valid.
+    // Keep preset + entryNodes in lockstep with mobile (logos-transport.ts ENTRY_NODES).
     LogosMap cfg = {
-        {"logLevel", "INFO"}, {"mode", "Core"}, {"preset", "logos.dev"}, {"relay", true},
+        {"logLevel", "INFO"}, {"mode", "Core"}, {"preset", "logos.test"}, {"relay", true},
         {"entryNodes", LogosMap::array({
-            "/dns4/delivery-01.do-ams3.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAmTUbnxLGT9JvV6mu9oPyDjqHK4Phs1VDJNUgESgNSkuby",
-            "/dns4/delivery-02.do-ams3.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAmMK7PYygBtKUQ8EHp7EfaD3bCEsJrkFooK8RQ2PVpJprH",
-            "/dns4/delivery-01.gc-us-central1-a.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm4S1JYkuzDKLKQvwgAhZKs9otxXqt8SCGtB4hoJP1S397",
-            "/dns4/delivery-02.gc-us-central1-a.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm8Y9kgBNtjxvCnf1X6gnZJW5EGE4UwwCL3CCm55TwqBiH",
-            "/dns4/delivery-01.ac-cn-hongkong-c.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm8YokiNun9BkeA1ZRmhLbtNUvcwRr64F69tYj9fkGyuEP",
-            "/dns4/delivery-02.ac-cn-hongkong-c.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAkvwhGHKNry6LACrB8TmEFoCJKEX29XR5dDUzk3UT3UNSE",
+            "/dns4/node-01.do-ams3.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmQ9X2xDfPG3uL77V9piYDhjq14JhKCtcmNYsTMKNqrKCj",
+            "/dns4/node-02.do-ams3.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmB8NYprrfQrgWVzsJtYWkfjsXbmJEGNMG6othXsQ53BwG",
+            "/dns4/node-01.gc-us-central1-a.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmF8WtwGPmeGHgYAX2277jHgy5cW9F7zsB8EqUjBZQAZQ3",
+            "/dns4/node-02.gc-us-central1-a.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmUuXhUW9bdJpzN1kfDziFiUZo4bszTk66cvr7uuyCHXR7",
+            "/dns4/node-01.ac-cn-hongkong-c.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmL3oU95jh1BZHozn3uNhx8HEneirgr8M1jEAapzXGDqRF",
+            "/dns4/node-02.ac-cn-hongkong-c.logos.test.status.im/tcp/30303/p2p/16Uiu2HAm28CoBZjpyxsanC8tQpbvZ7bZJnVYuB1EgFzb571qpWsV",
         })},
     };
     if (const char* ov = std::getenv("QAKU_DELIVERY_CFG")) {

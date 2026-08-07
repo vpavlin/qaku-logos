@@ -37,16 +37,21 @@ export function shardFor(contentTopic: string, count = 8): number {
   return Number(val % BigInt(count));
 }
 
-// logos.dev fleet bootstrap multiaddrs — KYM's BOOTSTRAP, pinned so the node meshes.
+// FLEET — logos.test (Logos Test Network, cluster 2, 8 shards). We were on logos.dev,
+// but logos.dev migrated to CLUSTER 3: the preset baked into liblogosdelivery still maps
+// logos.dev→cluster 2, so a fresh node dials the (now cluster-3) logos.dev boxes with
+// cluster-2 config and never meshes — "existing connections persist, new ones fail".
+// logos.test stays on cluster 2, which keeps qaku's shard math valid (sha256("qaku"+"1")
+// % 8 = shard 0). Preset + entryNodes must stay in lockstep with qaku_core (C++ desktop).
+const FLEET_PRESET = "logos.test";
 export const ENTRY_NODES: string[] = [
-  "/dns4/delivery-01.do-ams3.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAmTUbnxLGT9JvV6mu9oPyDjqHK4Phs1VDJNUgESgNSkuby",
-  "/dns4/delivery-02.do-ams3.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAmMK7PYygBtKUQ8EHp7EfaD3bCEsJrkFooK8RQ2PVpJprH",
-  "/dns4/delivery-01.gc-us-central1-a.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm4S1JYkuzDKLKQvwgAhZKs9otxXqt8SCGtB4hoJP1S397",
-  "/dns4/delivery-02.gc-us-central1-a.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm8Y9kgBNtjxvCnf1X6gnZJW5EGE4UwwCL3CCm55TwqBiH",
-  "/dns4/delivery-01.ac-cn-hongkong-c.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm8YokiNun9BkeA1ZRmhLbtNUvcwRr64F69tYj9fkGyuEP",
-  "/dns4/delivery-02.ac-cn-hongkong-c.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAkvwhGHKNry6LACrB8TmEFoCJKEX29XR5dDUzk3UT3UNSE",
+  "/dns4/node-01.do-ams3.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmQ9X2xDfPG3uL77V9piYDhjq14JhKCtcmNYsTMKNqrKCj",
+  "/dns4/node-02.do-ams3.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmB8NYprrfQrgWVzsJtYWkfjsXbmJEGNMG6othXsQ53BwG",
+  "/dns4/node-01.gc-us-central1-a.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmF8WtwGPmeGHgYAX2277jHgy5cW9F7zsB8EqUjBZQAZQ3",
+  "/dns4/node-02.gc-us-central1-a.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmUuXhUW9bdJpzN1kfDziFiUZo4bszTk66cvr7uuyCHXR7",
+  "/dns4/node-01.ac-cn-hongkong-c.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmL3oU95jh1BZHozn3uNhx8HEneirgr8M1jEAapzXGDqRF",
+  "/dns4/node-02.ac-cn-hongkong-c.logos.test.status.im/tcp/30303/p2p/16Uiu2HAm28CoBZjpyxsanC8tQpbvZ7bZJnVYuB1EgFzb571qpWsV",
 ];
-const FLEET_PRESET = "logos.dev";
 const SETTLE_MS = 10000;         // KYM SETTLE_MS
 const FILTER_RENEW_MS = 60000;   // KYM FILTER_RENEW_MS
 const STORE_PAGE = 100;          // KYM STORE_PAGE
