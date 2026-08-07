@@ -104,6 +104,8 @@ function AppInner() {
     try { await sessions.resync(true); } catch { /* */ }
     setTimeout(() => setRefreshing(false), 900);
   };
+  const openRoom = (h: string) => { sessions.markSeen(h); setOpenHash(h); };
+  const leaveRoom = () => { if (openHash) sessions.markSeen(openHash); setOpenHash(null); };
 
   useEffect(() => {
     const un = sessions.subscribe(scheduleForce);
@@ -119,7 +121,7 @@ function AppInner() {
       if (scanning) { setScanning(false); return true; }
       if (nameModal) { setNameModal(false); return true; }
       if (shareHash) { setShareHash(null); return true; }
-      if (openHash) { setOpenHash(null); return true; }
+      if (openHash) { leaveRoom(); return true; }
       return false;
     };
     const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
@@ -167,16 +169,20 @@ function AppInner() {
             <Text style={s.namePillT} numberOfLines={1}>{sessions.myName || shortAddr(sessions.myAddress)}</Text>
           </TouchableOpacity>
         </View>
-        <Text style={s.section}>Your Q&As</Text>
+        <View style={s.sectionRow}>
+          <Text style={s.section}>Your Q&As</Text>
+          {sessions.syncing ? <Text style={s.syncingSmall}>⟳ syncing…</Text> : null}
+        </View>
         <ScrollView style={{ flex: 1 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} colors={[C.primary]} progressBackgroundColor={C.surface} />}>
           {rooms.length === 0 ? <Text style={s.empty}>No Q&As yet. Create one, or join with a secret / QR.</Text> : null}
           {rooms.map((r) => (
-            <TouchableOpacity key={r.topicHash} style={s.roomCard} onPress={() => setOpenHash(r.topicHash)}>
+            <TouchableOpacity key={r.topicHash} style={[s.roomCard, r.unread > 0 && s.roomCardUnread]} onPress={() => openRoom(r.topicHash)}>
               <View style={{ flex: 1 }}>
-                <Text style={s.roomTitle} numberOfLines={1}>{r.title}</Text>
+                <Text style={[s.roomTitle, r.unread > 0 && { color: C.text }]} numberOfLines={1}>{r.title}</Text>
                 <Text style={s.roomSub}>{r.questions} question{r.questions === 1 ? "" : "s"}{r.owned ? "  ·  you host" : ""}</Text>
               </View>
               {r.owned ? <View style={s.hostBadge}><Text style={s.hostBadgeT}>HOST</Text></View> : null}
+              {r.unread > 0 ? <View style={s.unreadBadge}><Text style={s.unreadBadgeT}>{r.unread > 99 ? "99+" : r.unread}</Text></View> : null}
               <Text style={s.chev}>›</Text>
             </TouchableOpacity>
           ))}
@@ -253,10 +259,11 @@ function AppInner() {
   return (
     <SafeAreaView style={s.root}>
       <View style={s.roomHead}>
-        <TouchableOpacity onPress={() => setOpenHash(null)}><Text style={s.back}>‹ Q&As</Text></TouchableOpacity>
+        <TouchableOpacity onPress={leaveRoom}><Text style={s.back}>‹ Q&As</Text></TouchableOpacity>
         <Text style={s.roomHeadTitle} numberOfLines={1}>{title}</Text>
         <TouchableOpacity onPress={() => setShareHash(openHash)}><Text style={s.share}>Share</Text></TouchableOpacity>
       </View>
+      {sessions.syncing ? <Text style={s.syncingHint}>⟳  Syncing this Q&A… questions may still be arriving</Text> : null}
       {(sessions.myName || names[sessions.myAddress]) ? null : <TouchableOpacity onPress={() => { setNameText(sessions.myName); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
       <View style={s.askRow}>
         <TextInput style={s.input} placeholder="Ask a question…" placeholderTextColor={C.muted} value={q} onChangeText={setQ} />
@@ -363,6 +370,12 @@ const s = StyleSheet.create({
   section: { color: C.muted, fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 },
   empty: { color: C.muted, fontSize: 14, textAlign: "center", marginTop: 30, paddingHorizontal: 20, lineHeight: 20 },
   roomCard: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: C.surface, borderRadius: 12, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: C.border },
+  roomCardUnread: { borderColor: C.primary },
+  unreadBadge: { backgroundColor: C.primary, borderRadius: 11, minWidth: 22, height: 22, paddingHorizontal: 6, alignItems: "center", justifyContent: "center" },
+  unreadBadgeT: { color: C.primaryFg, fontSize: 12, fontWeight: "800" },
+  syncingHint: { color: C.primary, fontSize: 12, marginBottom: 8 },
+  sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+  syncingSmall: { color: C.primary, fontSize: 11 },
   roomTitle: { color: C.text, fontSize: 16, fontWeight: "700" },
   roomSub: { color: C.muted, fontSize: 12, marginTop: 2 },
   hostBadge: { backgroundColor: C.primary, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },

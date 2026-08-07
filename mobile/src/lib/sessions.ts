@@ -55,9 +55,20 @@ export class Sessions {
   private seedTimer: any = null;
   loaded = false;   // local state (registry + logs) is in memory — UI can render now
   started = false;  // the node is up — safe to join/publish/sync
+  syncing = false;  // a catch-up round is active / events still flowing — show a spinner
+  private syncSettle: any = null;
+  private seenTs = new Map<string, number>();   // topicHash -> latest question ts the user has seen
   myAddress = "";
   myName = "";
   listeners = new Set<() => void>();
+
+  // Flag "syncing" for a few seconds; extended while events keep arriving, so the UI can
+  // show "Syncing…" and clear it once a channel goes quiet.
+  private markSyncing(ms = 3500) {
+    if (!this.syncing) { this.syncing = true; this.emit(); }
+    clearTimeout(this.syncSettle);
+    this.syncSettle = setTimeout(() => { this.syncing = false; this.emit(); }, ms);
+  }
 
   // Persist a room's log a short moment after it changes (batch bursts of ingests).
   private scheduleSave(room: Room) {
@@ -92,6 +103,7 @@ export class Sessions {
     this.myAddress = this.identity.address;
     this.deviceId = await getDeviceId();
     try { this.myName = (await SecureStore.getItemAsync("qaku-myname")) || ""; } catch { /* */ }
+    try { const raw = await SecureStore.getItemAsync("qaku-seen"); if (raw) for (const [k, v] of Object.entries(JSON.parse(raw))) this.seenTs.set(k, Number(v)); } catch { /* */ }
     for (const meta of await this.loadRegistry()) {
       const room = this.makeRoom(meta);
       await this.hydrate(room);   // restore the persisted log
@@ -108,6 +120,7 @@ export class Sessions {
       await transport.start({ deviceId: this.deviceId, topics: [...this.rooms.keys()], onStatus, onReceive: (t, c) => this.onCandidates(t, c) });
       this.started = true;
       this.emit();
+      this.markSyncing(8000);   // initial catch-up window
       await transport.join([...this.rooms.keys()]).catch(() => {}); // catch rooms added during bring-up
       // Catch-up rounds — retried to beat a still-forming mesh (a dropped first SYNC_REQ
       // is how offline-posted questions got missed).
@@ -140,6 +153,7 @@ export class Sessions {
     const now = Date.now();
     if (!force && now - this.lastResync < 4000) return;     // coalesce rapid triggers (force = pull-to-refresh)
     this.lastResync = now;
+    this.markSyncing();
     for (const room of this.rooms.values()) { this.sendSyncReq(room).catch(() => {}); this.seedRoom(room); }
     try { await transport.storeSync((t, cands) => this.onCandidates(t, cands)); this.emit(); } catch { /* */ }
   }
@@ -174,6 +188,7 @@ export class Sessions {
     room.ids.add(event.id);
     try { room.clock.receive(event.hlc); } catch { /* */ }
     this.scheduleSave(room);   // durable — survives reload without needing a peer
+    if (this.syncing) this.markSyncing(2500);   // events flowing — keep "syncing" until quiet
     this.emit();
   }
 
@@ -273,11 +288,24 @@ export class Sessions {
   // Cheap title (no fold) for the room header fallback — avoids computeState in render.
   metaTitle(topicHash: string): string { return this.byHash.get(topicHash)?.meta.title || ""; }
 
+  // Mark every current question in a room as seen (clears its unread badge). Persisted.
+  async markSeen(topicHash: string) {
+    const r = this.byHash.get(topicHash); if (!r) return;
+    const st = computeState(r.log);
+    let maxTs = this.seenTs.get(topicHash) || 0;
+    for (const q of (st.questions || [])) if (q.ts > maxTs) maxTs = q.ts;
+    this.seenTs.set(topicHash, maxTs);
+    try { await SecureStore.setItemAsync("qaku-seen", JSON.stringify(Object.fromEntries(this.seenTs))); } catch { /* */ }
+    this.emit();
+  }
+
   // Room list for the home screen: title + question count + open/closed.
-  list(): { topicHash: string; title: string; questions: number; owned: boolean }[] {
+  list(): { topicHash: string; title: string; questions: number; owned: boolean; unread: number }[] {
     return [...this.byHash.values()].map((r) => {
       const st = computeState(r.log);
-      return { topicHash: r.meta.topicHash, title: (st.session && st.session.title) || r.meta.title, questions: (st.questions || []).length, owned: st.owner === this.myAddress };
+      const qs = st.questions || [];
+      const seen = this.seenTs.get(r.meta.topicHash) || 0;
+      return { topicHash: r.meta.topicHash, title: (st.session && st.session.title) || r.meta.title, questions: qs.length, owned: st.owner === this.myAddress, unread: qs.filter((q: any) => q.ts > seen).length };
     });
   }
 }
