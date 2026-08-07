@@ -44,6 +44,7 @@ namespace T {
     constexpr const char* POLL_SET_ACTIVE= "poll.setActive";
     constexpr const char* POLL_DELETE    = "poll.delete";
     constexpr const char* POLL_VOTE      = "poll.vote";
+    constexpr const char* PROFILE_SET    = "profile.set";   // self-scoped display name (participant)
 }
 
 // Union by id, sort by HLC. Idempotent - redelivery is a no-op. Pure.
@@ -98,7 +99,7 @@ inline Admission admitEvents(const std::vector<Event>& evs) {
             if (admins.count(author) || (it != creatorOf.end() && it->second == author)) A.admitted.push_back(e);
             continue;
         }
-        if (e.type == T::QUESTION_ADD || e.type == T::UPVOTE || e.type == T::POLL_VOTE) { A.admitted.push_back(e); continue; }
+        if (e.type == T::QUESTION_ADD || e.type == T::UPVOTE || e.type == T::POLL_VOTE || e.type == T::PROFILE_SET) { A.admitted.push_back(e); continue; }
     }
     for (auto& a : admins) A.admins.push_back(a);
     return A;
@@ -119,6 +120,7 @@ inline json computeState(const std::vector<Event>& evs) {
     std::map<std::string,QV> questions; std::vector<std::string> qOrder;
     std::map<std::string,AV> answers;   std::vector<std::string> aOrder;
     std::map<std::string,PV> polls;     std::vector<std::string> pOrder;
+    std::map<std::string,std::string> names;   // author address -> display name (LWW by HLC order)
     // upvote register: targetId -> (voter -> up)
     std::map<std::string, std::map<std::string,bool>> up;
 
@@ -165,6 +167,9 @@ inline json computeState(const std::vector<Event>& evs) {
             auto it = polls.find(p.value("pollId","")); if (it!=polls.end()) it->second.active = p.value("active", false);
         } else if (t == T::POLL_DELETE) {
             auto it = polls.find(p.value("pollId","")); if (it!=polls.end()) it->second.deleted = true;
+        } else if (t == T::PROFILE_SET) {
+            std::string nm = p.value("name",""); if (nm.size() > 40) nm = nm.substr(0,40);
+            names[e.hlc.dev] = nm;   // self-scoped: names the author's OWN address, LWW by fold order
         } else if (t == T::POLL_VOTE) {
             auto it = polls.find(p.value("pollId","")); if (it!=polls.end()) it->second.votes[p.value("voter", e.hlc.dev)] = p.value("optionId","");
         }
@@ -208,7 +213,7 @@ inline json computeState(const std::vector<Event>& evs) {
 
     return json{
         {"session", session}, {"owner", adm.owner}, {"admins", adm.admins}, {"isSession", adm.isSession},
-        {"questions", qs}, {"polls", ps},
+        {"questions", qs}, {"polls", ps}, {"names", names},
         {"questionCount", qs.size()}, {"eventCount", (long long)ordered.size()},
     };
 }

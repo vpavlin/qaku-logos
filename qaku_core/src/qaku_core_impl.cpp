@@ -220,6 +220,7 @@ void QakuCoreImpl::onContextReady() {
     if (const char* d = std::getenv("QAKU_DEVICE_ID")) m_deviceId = d;
     else if (!m_dataDir.empty()) { std::string p = qaku::persist::readDeviceId(m_dataDir); if (!p.empty()) m_deviceId = p; }
     loadOrCreateSignKey();   // our secp256k1 author identity (m_myAddress) — before any fold/authoring
+    if (!m_dataDir.empty()) { std::ifstream nf(m_dataDir + "/myname.txt"); if (nf) { std::getline(nf, m_myName); } }
     // Load persisted sessions (registry + each pair.key + log.json), or create a
     // fresh default session on first run. Replaces the old in-memory-only seed.
     loadSessions();
@@ -325,6 +326,7 @@ void QakuCoreImpl::publishState() {
     s["shareUri"] = cur().haveKey ? (std::string(kShareScheme) + hex(cur().identity.secret)) : "";
     s["deviceId"] = m_myAddress;   // the copyable IDENTITY is now our signing address (for admin lists)
     s["address"] = m_myAddress;
+    s["myName"] = m_myName;
     s["currentId"] = m_current;
     s["role"] = roleFor(cur().log, m_myAddress);
     // Transport diagnostics: the content topic we publish/subscribe on, and the
@@ -409,7 +411,22 @@ std::string QakuCoreImpl::createSession(std::string title, std::string descripti
     if (title.empty()) title = "Untitled Q&A";
     Event e = mkEvent(qaku::T::SESSION_CREATE, nextHlc(cur()), {{"sessionId", cur().fingerprint}, {"title", title}, {"description", description}});
     pushEvent(cur(), e, true);
+    emitProfileSet(cur());   // announce our display name on this session's topic
     saveSessions();   // capture the session title in the registry
+    return snapshot();
+}
+// Author our display name (if set) into a keyed session, so peers render a pseudonym
+// instead of the raw address. Self-scoped (names our OWN address) → safe for anyone.
+void QakuCoreImpl::emitProfileSet(Session& s) {
+    if (m_myName.empty() || !s.haveKey) return;
+    pushEvent(s, mkEvent(qaku::T::PROFILE_SET, nextHlc(s), {{"name", m_myName}}), true);
+}
+std::string QakuCoreImpl::setName(std::string name) {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    if (name.size() > 40) name = name.substr(0, 40);
+    m_myName = name;
+    if (!m_dataDir.empty()) { std::ofstream f(m_dataDir + "/myname.txt", std::ios::trunc); if (f) f << m_myName; }
+    for (auto& kv : m_sessions) emitProfileSet(kv.second);   // re-announce on every joined Q&A
     return snapshot();
 }
 std::string QakuCoreImpl::joinSession(std::string secretHex) {
@@ -426,6 +443,7 @@ std::string QakuCoreImpl::joinSession(std::string secretHex) {
     Session* target = (!m_sessions.empty() && cur().haveKey && cur().log.empty()) ? &cur() : &newSessionEntry();
     applySecret(*target, s, true);   // writes the joined session's pair.key
     m_current = target->id;
+    emitProfileSet(*target);   // announce our display name on the joined topic
     saveSessions();
     return snapshot();
 }

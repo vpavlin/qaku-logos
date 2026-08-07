@@ -80,6 +80,7 @@ public:
     // --- sync / pairing ---
     std::string setSecret(std::string secretHex);
     std::string setDeviceId(std::string deviceId);
+    std::string setName(std::string name);
     std::string ingestSealed(std::string sealedHex);
     std::string resync();
 
@@ -152,7 +153,9 @@ private:
     // lines up across platforms. Distinct from m_deviceId (which is just the transport id).
     qaku::SignId m_signId;
     std::string m_myAddress;
+    std::string m_myName;          // display name (pseudonym); authored as profile.set per session
     void loadOrCreateSignKey();
+    void emitProfileSet(Session& s);   // author a profile.set (our display name) into a keyed session
     std::string m_snapshot = "{}";
     std::string m_status = "Starting...";
     bool m_nodeReady = false;

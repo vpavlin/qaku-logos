@@ -152,6 +152,8 @@ Item {
     readonly property color qkText: "#ffffff"
     readonly property color qkMuted: "#9f9fab"
     function shortAddr(a) { return (a && a.length > 12) ? (a.substring(0, 6) + "…" + a.substring(a.length - 4)) : (a || ""); }
+    // display name (from profile.set fold) if the author set one, else their short address
+    function nameOf(a) { var n = root.st.names ? root.st.names[a] : ""; return (n && n.length > 0) ? n : root.shortAddr(a); }
     function hueFor(a) { var h = 0; a = a || ""; for (var i = 2; i < Math.min(a.length, 10); i++) h = (h * 31 + a.charCodeAt(i)) % 360; return h; }
     function timeAgo(ts) {
         if (!ts) return "";
@@ -413,10 +415,34 @@ Item {
 
                 Rectangle { Layout.fillWidth: true; height: 1; color: Theme.palette.borderHairline }
 
-                // ---- Settings: device name ----
+                // ---- Settings: display name + identity ----
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: Theme.spacing.tiny
+                    LogosText {
+                        text: "DISPLAY NAME"
+                        color: Theme.palette.textTertiary
+                        font.pixelSize: Theme.typography.badgeText
+                        font.weight: Theme.typography.weightMedium
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.spacing.small
+                        AppField {
+                            id: nameField
+                            Layout.fillWidth: true
+                            implicitHeight: 34
+                            placeholderText: "A name people will see (optional)"
+                            text: root.st.myName || ""
+                        }
+                        LogosButton {
+                            text: "Save"
+                            implicitWidth: 64; implicitHeight: 34
+                            enabled: nameField.text !== (root.st.myName || "")
+                            onClicked: root.act("setName", [nameField.text], "Could not set name")
+                        }
+                    }
+                    Item { Layout.preferredHeight: Theme.spacing.tiny }
                     LogosText {
                         text: "YOUR IDENTITY"
                         color: Theme.palette.textTertiary
@@ -824,7 +850,7 @@ Item {
                                     LogosText { width: parent.width; text: modelData.content || ""; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; wrapMode: Text.WordWrap }
                                     Row {
                                         width: parent.width; spacing: Theme.spacing.small
-                                        LogosText { text: root.shortAddr(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                                        LogosText { text: root.nameOf(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
                                         Item { width: parent.width - 160; height: 1 }
                                         LogosText { visible: root.isAdmin; text: "Unhide"; color: root.qkTeal; font.pixelSize: Theme.typography.secondaryText
                                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.act("moderate", [modelData.id, "false"], "Could not unhide") }
@@ -888,7 +914,7 @@ Item {
                                             color: Qt.hsla(root.hueFor(modelData.author) / 360, 0.45, 0.32, 1)
                                             LogosText { anchors.centerIn: parent; text: (modelData.author && modelData.author.length > 2) ? modelData.author.charAt(2).toUpperCase() : "?"; color: root.qkText; font.pixelSize: 9; font.weight: Theme.typography.weightBold }
                                         }
-                                        LogosText { text: root.shortAddr(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                                        LogosText { text: root.nameOf(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
                                         LogosText { text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; opacity: 0.85 }
                                         // Our own question not yet dispatched to the network (see qaku_core m_unpublished).
                                         LogosText { visible: !!modelData.queued; text: "·  ⏳ queued"; color: root.qkGold; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightBold }
@@ -936,7 +962,7 @@ Item {
                                                 color: Qt.hsla(root.hueFor(modelData.author) / 360, 0.45, 0.32, 1)
                                                 LogosText { anchors.centerIn: parent; text: (modelData.author && modelData.author.length > 2) ? modelData.author.charAt(2).toUpperCase() : "?"; color: root.qkText; font.pixelSize: 8; font.weight: Theme.typography.weightBold }
                                             }
-                                            LogosText { text: root.shortAddr(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText }
+                                            LogosText { text: root.nameOf(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText }
                                             LogosText { visible: !!modelData.accepted; text: "·  accepted"; color: root.qkTeal; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
                                             LogosText { text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; opacity: 0.85 }
                                         }
