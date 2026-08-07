@@ -273,10 +273,20 @@ export class Sessions {
     const event = (ev as any)[type](room.clock.send(), payload);
     signEvent(this.identity, event);
     this.ingest(room, event);
+    // Persist our OWN event to disk IMMEDIATELY (not the 400ms debounced save) — otherwise
+    // "publish → kill the app → reopen" loses it before the timer fires. Durable before we
+    // even attempt the network send.
+    await this.flushSave(room);
     // Mark "queued" (durable) BEFORE the send, then attempt it. trySend clears it once the
     // send lands in a live mesh; a mesh-gap send stays queued and retryUnpublished resends.
     this.unconfirmed.add(event.id); this.saveUnconfirmed();
     await this.trySend(room, event);
+  }
+
+  // Write a room's log to disk NOW, cancelling any pending debounced save.
+  private async flushSave(room: Room) {
+    clearTimeout(this.saveTimers.get(room.meta.topicHash));
+    await saveLogFile(room.meta.topicHash, room.log);
   }
 
   // Publish one event and, on success into a NON-EMPTY mesh, mark it published. mesh===0
