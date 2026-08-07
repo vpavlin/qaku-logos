@@ -264,6 +264,11 @@ function AppInner() {
           <Text style={s.bylineName} numberOfLines={1}>{nameOf(qq.author)}</Text>
           {qq.verified ? <Text style={s.verified}>✓</Text> : null}
           <Text style={s.time} numberOfLines={1}>· {timeAgo(qq.ts)}</Text>
+          {qq.author === sessions.myAddress ? (
+            sessions.isPublished(qq.evId)
+              ? <Text style={s.pubOk} numberOfLines={1}>· ✓ published</Text>
+              : <Text style={s.pubPending} numberOfLines={1}>· ⏳ queued</Text>
+          ) : null}
         </View>
         {(qq.answers || []).map((a: any) => (
           <View key={a.id} style={s.answer}>
@@ -297,6 +302,7 @@ function AppInner() {
       </View>
       {sessions.isStarred(openHash) ? <TouchableOpacity onPress={() => notifyQuestion(openHash!, "Test notification", "If you can see this, notifications work ✓")}><Text style={s.starHint}>★ Kept live in the background · tap to send a test notification</Text></TouchableOpacity> : null}
       {sessions.syncing ? <Text style={s.syncingHint}>⟳  Syncing this Q&A… questions may still be arriving</Text> : null}
+      {sessions.unpublishedIn(openHash) > 0 ? <Text style={s.queuedHint}>⏳ {sessions.unpublishedIn(openHash)} not yet published — retrying until they reach the network</Text> : null}
       {(sessions.myName || names[sessions.myAddress]) ? null : <TouchableOpacity onPress={() => { setNameText(sessions.myName); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
       {admin ? (
         <View style={s.adminBar}>
@@ -456,6 +462,7 @@ const s = StyleSheet.create({
   unreadBadge: { backgroundColor: C.primary, borderRadius: 11, minWidth: 22, height: 22, paddingHorizontal: 6, alignItems: "center", justifyContent: "center" },
   unreadBadgeT: { color: C.primaryFg, fontSize: 12, fontWeight: "800" },
   syncingHint: { color: C.primary, fontSize: 12, marginBottom: 8 },
+  queuedHint: { color: C.primary, fontSize: 12, marginBottom: 8, fontWeight: "700" },
   sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
   syncingSmall: { color: C.primary, fontSize: 11 },
   roomTitle: { color: C.text, fontSize: 16, fontWeight: "700" },
@@ -496,6 +503,8 @@ const s = StyleSheet.create({
   byline: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
   bylineName: { color: C.muted, fontSize: 12, maxWidth: 140 },
   verified: { color: C.accent, fontSize: 12, fontWeight: "800" },
+  pubOk: { color: C.accent, fontSize: 11, fontWeight: "700" },
+  pubPending: { color: C.primary, fontSize: 11, fontWeight: "800" },
   time: { color: C.muted, fontSize: 11, opacity: 0.8 },
   answer: { marginTop: 8, paddingLeft: 10, borderLeftWidth: 2, borderLeftColor: C.border },
   answerText: { color: "#d8d8e0", fontSize: 14, lineHeight: 19 },

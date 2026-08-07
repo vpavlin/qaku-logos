@@ -21,6 +21,7 @@ import * as FileSystem from "expo-file-system";
 // Durable local log store (the fix for "reload → empty Q&A": content must survive locally,
 // not depend on re-pulling from a peer that may not exist). One JSON file per room.
 const logPath = (h: string) => (FileSystem.documentDirectory || "") + "qaku-log-" + h + ".json";
+const unconfirmedPath = () => (FileSystem.documentDirectory || "") + "qaku-unconfirmed.json";
 async function loadLogFile(h: string): Promise<any[]> {
   try { const p = logPath(h); const info = await FileSystem.getInfoAsync(p); if (!info.exists) return []; const s = await FileSystem.readAsStringAsync(p); const a = JSON.parse(s); return Array.isArray(a) ? a : []; } catch { return []; }
 }
@@ -59,6 +60,10 @@ export class Sessions {
   private syncSettle: any = null;
   private seenTs = new Map<string, number>();   // topicHash -> latest question ts the user has seen
   private starred = new Set<string>();          // Q&As kept alive by the foreground service
+  // Event ids we AUTHORED that aren't network-confirmed yet ("queued"). Durable, so a
+  // question created during a mesh gap survives reload and keeps being retried until the
+  // store echoes it back (proof it's actually on the network → "published"). See retryUnpublished.
+  private unconfirmed = new Set<string>();
   private startTime = 0;
   private connectedAt = 0;
   onNewQuestion: ((topicHash: string, content: string, title: string) => void) | null = null;
@@ -110,6 +115,7 @@ export class Sessions {
     try { this.myName = (await SecureStore.getItemAsync("qaku-myname")) || ""; } catch { /* */ }
     try { const raw = await SecureStore.getItemAsync("qaku-seen"); if (raw) for (const [k, v] of Object.entries(JSON.parse(raw))) this.seenTs.set(k, Number(v)); } catch { /* */ }
     try { const raw = await SecureStore.getItemAsync("qaku-starred"); if (raw) this.starred = new Set(JSON.parse(raw)); } catch { /* */ }
+    try { const p = unconfirmedPath(); const info = await FileSystem.getInfoAsync(p); if (info.exists) { const a = JSON.parse(await FileSystem.readAsStringAsync(p)); if (Array.isArray(a)) this.unconfirmed = new Set(a); } } catch { /* */ }
     this.startTime = Date.now();
     for (const meta of await this.loadRegistry()) {
       const room = this.makeRoom(meta);
@@ -166,6 +172,7 @@ export class Sessions {
     // 60s seed timer + replies to incoming SYNC_REQ — keeping resync light so the 30s bg
     // loop and pull-to-refresh don't seal the whole log and jank the UI.
     for (const room of this.rooms.values()) this.sendSyncReq(room).catch(() => {});
+    this.retryUnpublished();   // re-send anything still queued; storeSync below will confirm it
     try { await transport.storeSync((t, cands) => this.onCandidates(t, cands)); this.emit(); } catch { /* */ }
   }
 
@@ -180,7 +187,12 @@ export class Sessions {
       try { plain = open(room.sealId, cand, room.topic); } catch { continue; }
       try {
         const envlp = JSON.parse(utf8Decode(plain));
-        if (envlp && envlp.type === "EVENT" && envlp.event) this.ingest(room, envlp.event);
+        if (envlp && envlp.type === "EVENT" && envlp.event) {
+          // Seeing our own event return from the network confirms it published (clears the
+          // "queued" badge). Do this even for a duplicate — ingest() dedups and won't emit.
+          if (this.unconfirmed.delete(envlp.event.id)) { this.saveUnconfirmed(); this.emit(); }
+          this.ingest(room, envlp.event);
+        }
         else if (envlp && envlp.type === "SYNC_REQ") this.serveLog(room, typeof envlp.from === "string" ? envlp.from : "");
       } catch { /* opened but not an envelope */ }
       return true;
@@ -261,7 +273,29 @@ export class Sessions {
     const event = (ev as any)[type](room.clock.send(), payload);
     signEvent(this.identity, event);
     this.ingest(room, event);
+    // Mark "queued" (durable) BEFORE the send — so if the send is dropped (node not up,
+    // empty mesh), retryUnpublished keeps re-sending until the store echoes it back.
+    this.unconfirmed.add(event.id); this.saveUnconfirmed();
     await this.publish(room, { v: 1, type: "EVENT", event }).catch(() => {});
+  }
+
+  private async saveUnconfirmed() {
+    try { await FileSystem.writeAsStringAsync(unconfirmedPath(), JSON.stringify([...this.unconfirmed])); } catch { /* best-effort */ }
+  }
+  // Re-publish every still-queued event from the durable log. Cheap when nothing's pending
+  // (the common case); the safety net when a send was dropped during a mesh gap.
+  private retryUnpublished() {
+    if (!this.started || this.unconfirmed.size === 0) return;
+    for (const room of this.rooms.values())
+      for (const e of room.log)
+        if (this.unconfirmed.has(e.id)) this.publish(room, { v: 1, type: "EVENT", event: e }).catch(() => {});
+  }
+  // Our own event came back from the network (a store pull) → it's really published.
+  isPublished(evId: string): boolean { return !this.unconfirmed.has(evId); }
+  pendingCount(): number { return this.unconfirmed.size; }
+  unpublishedIn(topicHash: string): number {
+    const r = this.byHash.get(topicHash); if (!r) return 0;
+    let n = 0; for (const e of r.log) if (this.unconfirmed.has(e.id)) n++; return n;
   }
 
   // --- public API ---------------------------------------------------------

@@ -161,7 +161,7 @@ export function computeState(events) {
       case EventType.QUESTION_ADD: {
         const cur = questions.get(p.questionId);
         if (cur) cur.view = { ...cur.view, ...p };
-        else questions.set(p.questionId, { view: { id: p.questionId, content: p.content, author: p.author || e.hlc.dev, verified: !!e.sig, ts: e.hlc.wall, moderated: false, acceptedAnswerId: null }, deleted: false });
+        else questions.set(p.questionId, { view: { id: p.questionId, evId: e.id, content: p.content, author: p.author || e.hlc.dev, verified: !!e.sig, ts: e.hlc.wall, moderated: false, acceptedAnswerId: null }, deleted: false });
         break;
       }
       case EventType.QUESTION_EDIT: {
@@ -183,7 +183,7 @@ export function computeState(events) {
       case EventType.ANSWER_POST: {
         const cur = answers.get(p.answerId);
         if (cur) cur.view = { ...cur.view, ...p };
-        else answers.set(p.answerId, { view: { id: p.answerId, questionId: p.questionId, content: p.content, author: p.author || e.hlc.dev, verified: !!e.sig, ts: e.hlc.wall, accepted: false }, deleted: false });
+        else answers.set(p.answerId, { view: { id: p.answerId, evId: e.id, questionId: p.questionId, content: p.content, author: p.author || e.hlc.dev, verified: !!e.sig, ts: e.hlc.wall, accepted: false }, deleted: false });
         break;
       }
       case EventType.ANSWER_EDIT: {
