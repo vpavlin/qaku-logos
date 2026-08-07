@@ -134,6 +134,14 @@ Item {
         return Theme.palette.textTertiary;
     }
 
+    // ---- join/fetch state: we hold this Q&A's secret+topic (joined) but its state
+    // hasn't arrived yet (no session.create folded in). Show a "fetching" indicator
+    // instead of the generic empty state, so a join doesn't look like it did nothing.
+    readonly property bool awaitingState: root.secret.length === 64 && !root.hasSession
+    property bool awaitTimedOut: false
+    onAwaitingStateChanged: { root.awaitTimedOut = false; if (root.awaitingState) awaitTimer.restart(); else awaitTimer.stop(); }
+    Timer { id: awaitTimer; interval: 25000; onTriggered: root.awaitTimedOut = true }
+
     // ---- toast (mutation errors surfaced instead of swallowed) ----
     property string toastText: ""
     Timer { id: toastTimer; interval: 3200; onTriggered: root.toastText = "" }
@@ -442,11 +450,11 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
-            // empty state
+            // empty state — hidden while we're fetching a just-joined Q&A's state.
             ColumnLayout {
                 anchors.centerIn: parent
                 width: Math.min(parent.width - 2 * Theme.spacing.large, 420)
-                visible: !root.hasSession
+                visible: !root.hasSession && !root.awaitingState
                 spacing: Theme.spacing.small
                 LogosText {
                     Layout.alignment: Qt.AlignHCenter
@@ -462,6 +470,43 @@ Item {
                     color: Theme.palette.textSecondary
                     font.pixelSize: Theme.typography.primaryText
                     wrapMode: Text.WordWrap
+                }
+            }
+
+            // fetching state — joined a Q&A, waiting for a peer to share its history.
+            ColumnLayout {
+                anchors.centerIn: parent
+                width: Math.min(parent.width - 2 * Theme.spacing.large, 440)
+                visible: root.awaitingState
+                spacing: Theme.spacing.medium
+                BusyIndicator {
+                    Layout.alignment: Qt.AlignHCenter
+                    running: root.awaitingState && !root.awaitTimedOut
+                    implicitWidth: 48; implicitHeight: 48
+                }
+                LogosText {
+                    Layout.alignment: Qt.AlignHCenter
+                    text: root.awaitTimedOut ? "Still waiting for a peer…" : "Fetching this Q&A…"
+                    color: Theme.palette.text
+                    font.pixelSize: Theme.typography.panelTitleText
+                    font.weight: Theme.typography.weightBold
+                }
+                LogosText {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    text: root.awaitTimedOut
+                        ? "No peer has shared this Q&A's state yet. Make sure a device that hosts it (the phone or a hub, on the same secret) is online — then it stays put and syncs in the background."
+                        : "Joined. Waiting for a device that hosts this Q&A (a phone or hub) to send its questions & answers. This can take a few seconds."
+                    color: Theme.palette.textSecondary
+                    font.pixelSize: Theme.typography.primaryText
+                    wrapMode: Text.WordWrap
+                }
+                LogosText {
+                    visible: root.fingerprint.length > 0
+                    Layout.alignment: Qt.AlignHCenter
+                    text: "fp " + root.fingerprint
+                    color: Theme.palette.textTertiary
+                    font.pixelSize: Theme.typography.secondaryText
                 }
             }
 
