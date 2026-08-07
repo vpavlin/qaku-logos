@@ -272,8 +272,19 @@ function AppInner() {
         </View>
         {(qq.answers || []).map((a: any) => (
           <View key={a.id} style={s.answer}>
-            <Text style={[s.answerText, a.accepted && { color: C.accent }]}>{a.accepted ? "✓ " : "↳ "}{a.content}</Text>
-            <View style={s.byline}><Text style={s.bylineName}>{nameOf(a.author)}</Text>{a.verified ? <Text style={s.verified}>✓</Text> : null}<Text style={s.time}>· {timeAgo(a.ts)}</Text></View>
+            <TouchableOpacity style={s.ansUpvote} onPress={() => sessions.upvote(openHash!, a.id).catch(() => {})}>
+              <Text style={s.ansUpvoteArrow}>▲</Text><Text style={s.ansUpvoteN}>{a.upvotes || 0}</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.answerText, a.accepted && { color: C.accent, fontWeight: "600" }]}>{a.accepted ? "✓ " : ""}{a.content}</Text>
+              <View style={s.byline}>
+                <Avatar addr={a.author} name={nameOf(a.author)} size={16} />
+                <Text style={s.bylineName} numberOfLines={1}>{nameOf(a.author)}</Text>
+                {a.verified ? <Text style={s.verified}>✓</Text> : null}
+                {a.accepted ? <Text style={s.acceptedTag}>· accepted</Text> : null}
+                <Text style={s.time} numberOfLines={1}>· {timeAgo(a.ts)}</Text>
+              </View>
+            </View>
           </View>
         ))}
         {admin && (answering === qq.id ? (
@@ -506,8 +517,12 @@ const s = StyleSheet.create({
   pubOk: { color: C.accent, fontSize: 11, fontWeight: "700" },
   pubPending: { color: C.primary, fontSize: 11, fontWeight: "800" },
   time: { color: C.muted, fontSize: 11, opacity: 0.8 },
-  answer: { marginTop: 8, paddingLeft: 10, borderLeftWidth: 2, borderLeftColor: C.border },
+  answer: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8, paddingLeft: 10, borderLeftWidth: 2, borderLeftColor: C.border },
   answerText: { color: "#d8d8e0", fontSize: 14, lineHeight: 19 },
+  ansUpvote: { alignItems: "center", backgroundColor: C.surface2, borderRadius: 7, paddingHorizontal: 7, paddingVertical: 3, minWidth: 34 },
+  ansUpvoteArrow: { color: C.primary, fontSize: 10 },
+  ansUpvoteN: { color: C.text, fontWeight: "800", fontSize: 12 },
+  acceptedTag: { color: C.accent, fontSize: 11, fontWeight: "700" },
   answerRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   adminRow: { flexDirection: "row", gap: 16, marginTop: 8 },
   adminAction: { color: C.accent, fontSize: 13, fontWeight: "700" },

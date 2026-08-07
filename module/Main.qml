@@ -894,17 +894,43 @@ Item {
                                     Layout.fillWidth: true
                                     Layout.leftMargin: 58 + Theme.spacing.medium
                                     spacing: Theme.spacing.small
-                                    LogosText {
-                                        text: modelData.accepted ? "✓" : "↳"
-                                        color: modelData.accepted ? root.qkTeal : root.qkMuted
-                                        font.pixelSize: Theme.typography.secondaryText
+                                    // upvote pill for the ANSWER (smaller than the question's)
+                                    Rectangle {
+                                        Layout.alignment: Qt.AlignTop
+                                        implicitWidth: 40; implicitHeight: 40
+                                        radius: Theme.spacing.radiusSmall
+                                        color: aUpMa.containsMouse ? root.qkSurface2 : root.qkBg
+                                        border.color: root.qkBorder; border.width: 1
+                                        ColumnLayout {
+                                            anchors.centerIn: parent; spacing: 0
+                                            LogosText { Layout.alignment: Qt.AlignHCenter; text: "▲"; color: root.qkGold; font.pixelSize: 9 }
+                                            LogosText { Layout.alignment: Qt.AlignHCenter; text: "" + (modelData.upvotes || 0); color: root.qkText; font.pixelSize: 12; font.weight: Theme.typography.weightMedium }
+                                        }
+                                        MouseArea { id: aUpMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                            onClicked: root.act("upvoteAnswer", [modelData.id, "true"], "Could not upvote") }
                                     }
-                                    LogosText {
+                                    ColumnLayout {
                                         Layout.fillWidth: true
-                                        text: modelData.content || ""
-                                        color: modelData.accepted ? root.qkTeal : "#d8d8e0"
-                                        font.pixelSize: Theme.typography.secondaryText
-                                        wrapMode: Text.WordWrap
+                                        Layout.alignment: Qt.AlignVCenter
+                                        spacing: Theme.spacing.tiny
+                                        LogosText {
+                                            Layout.fillWidth: true
+                                            text: (modelData.accepted ? "✓  " : "") + (modelData.content || "")
+                                            color: modelData.accepted ? root.qkTeal : "#d8d8e0"
+                                            font.pixelSize: Theme.typography.secondaryText
+                                            wrapMode: Text.WordWrap
+                                        }
+                                        RowLayout {
+                                            spacing: Theme.spacing.tiny
+                                            Rectangle {
+                                                implicitWidth: 16; implicitHeight: 16; radius: 8
+                                                color: Qt.hsla(root.hueFor(modelData.author) / 360, 0.45, 0.32, 1)
+                                                LogosText { anchors.centerIn: parent; text: (modelData.author && modelData.author.length > 2) ? modelData.author.charAt(2).toUpperCase() : "?"; color: root.qkText; font.pixelSize: 8; font.weight: Theme.typography.weightBold }
+                                            }
+                                            LogosText { text: root.shortAddr(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText }
+                                            LogosText { visible: !!modelData.accepted; text: "·  accepted"; color: root.qkTeal; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
+                                            LogosText { text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; opacity: 0.85 }
+                                        }
                                     }
                                 }
                             }
