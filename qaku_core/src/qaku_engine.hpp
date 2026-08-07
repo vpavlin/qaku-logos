@@ -23,7 +23,7 @@ inline int compareHlc(const HLC& a, const HLC& b) {
     return 0;
 }
 
-struct Event { int v = 1; std::string id; std::string type; HLC hlc; std::string dev; json payload; };
+struct Event { int v = 1; std::string id; std::string type; HLC hlc; std::string dev; json payload; std::string pub; std::string sig; };
 
 // Event type constants - keep in lockstep with contract/src/events.mjs.
 namespace T {

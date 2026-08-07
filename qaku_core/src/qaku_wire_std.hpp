@@ -9,14 +9,18 @@ namespace qaku {
 using json = nlohmann::json;
 
 inline json eventToJson(const Event& e) {
-    return json{{"v", e.v},{"id", e.id},{"type", e.type},
+    json o = json{{"v", e.v},{"id", e.id},{"type", e.type},
                 {"hlc", {{"wall", e.hlc.wall},{"ctr", e.hlc.ctr},{"dev", e.hlc.dev}}},
                 {"dev", e.dev},{"payload", e.payload}};
+    if (!e.pub.empty()) o["pub"] = e.pub;   // authorship signature (secp256k1) — parity with JS
+    if (!e.sig.empty()) o["sig"] = e.sig;
+    return o;
 }
 inline Event eventFromJson(const json& j) {
     Event e; e.v = j.value("v", 1); e.id = j.value("id",""); e.type = j.value("type","");
     const json& h = j.at("hlc"); e.hlc.wall = h.value("wall",0LL); e.hlc.ctr = h.value("ctr",0LL); e.hlc.dev = h.value("dev","");
     e.dev = j.value("dev", e.hlc.dev); e.payload = j.value("payload", json::object());
+    e.pub = j.value("pub", ""); e.sig = j.value("sig", "");
     return e;
 }
 

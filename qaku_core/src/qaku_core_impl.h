@@ -31,6 +31,7 @@ class QTimer;
 #include "logos_module_context.h"
 #include "qaku_engine.hpp"
 #include "qaku_crypto.hpp"
+#include "qaku_identity.hpp"
 #include "qaku_wire_std.hpp"
 #include "qaku_persist_std.hpp"
 
@@ -108,7 +109,7 @@ private:
 
     // event builders + per-session helpers
     qaku::HLC nextHlc(Session& s);
-    void pushEvent(Session& s, const qaku::Event& e, bool broadcast);
+    void pushEvent(Session& s, qaku::Event e, bool broadcast);   // by value: signed in place when broadcast
     std::string adminGuard();
     void publishState();
     void setStatus(const std::string& s);
@@ -145,7 +146,13 @@ private:
     std::string m_dataDir;                       // ROOT (~/.qaku-core); each session at <root>/<id>
     bool m_deliveryStarting = false;
 
-    std::string m_deviceId = "qaku-core";
+    std::string m_deviceId = "qaku-core";   // TRANSPORT sender-id (SDS senderId / SYNC_REQ from)
+    // Authorship identity — a persisted secp256k1 key; m_myAddress is the "0x…" address
+    // used as hlc.dev on every event we author (parity with mobile), so owner/admin gating
+    // lines up across platforms. Distinct from m_deviceId (which is just the transport id).
+    qaku::SignId m_signId;
+    std::string m_myAddress;
+    void loadOrCreateSignKey();
     std::string m_snapshot = "{}";
     std::string m_status = "Starting...";
     bool m_nodeReady = false;

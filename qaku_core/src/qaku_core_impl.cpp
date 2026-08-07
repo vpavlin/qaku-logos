@@ -97,6 +97,27 @@ void QakuCoreImpl::loadOrCreateSecret() {
     }
 }
 
+// Load (or first-run generate + persist) this device's secp256k1 signing key. m_myAddress
+// becomes the author identity on every event we write. Env QAKU_SIGN_KEY (64-hex) pins it
+// for tests/hub. Key stored raw (32B) at <dataDir>/sign.key.
+void QakuCoreImpl::loadOrCreateSignKey() {
+    qaku::Bytes priv;
+    if (const char* e = std::getenv("QAKU_SIGN_KEY")) { qaku::Bytes b = qaku::fromHex(e); if (b.size() == 32) priv = b; }
+    if (priv.empty() && !m_dataDir.empty()) {
+        std::ifstream f(m_dataDir + "/sign.key", std::ios::binary);
+        if (f) { std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); if (s.size() == 32) priv.assign(s.begin(), s.end()); }
+    }
+    if (priv.size() == 32) m_signId = qaku::identityFromPriv(priv);
+    if (!m_signId.valid) {
+        m_signId = qaku::generateIdentity();
+        if (!m_dataDir.empty() && m_signId.valid) {
+            std::ofstream f(m_dataDir + "/sign.key", std::ios::binary | std::ios::trunc);
+            if (f) f.write((const char*)m_signId.priv.data(), 32);
+        }
+    }
+    m_myAddress = m_signId.valid ? m_signId.address : m_deviceId;
+}
+
 // --- on-disk persistence (mirrors KYM's per-budget layout) ------------------
 // Writable data dir: env QAKU_CORE_DATA (hub/tests) else $HOME/.qaku-core. Each
 // session lives in <root>/<id> (pair.key + log.json); the registry is
@@ -187,7 +208,7 @@ void QakuCoreImpl::applySecret(Session& s, const qaku::Bytes& secret, bool persi
 qaku::HLC QakuCoreImpl::nextHlc(Session& s) {
     long long t = nowMs();
     if (t > s.wall) { s.wall = t; s.ctr = 0; } else { s.ctr += 1; }
-    return qaku::HLC{ s.wall, s.ctr, m_deviceId };
+    return qaku::HLC{ s.wall, s.ctr, m_myAddress };   // author = our address (signEvent re-stamps it too)
 }
 
 void QakuCoreImpl::onContextReady() {
@@ -198,6 +219,7 @@ void QakuCoreImpl::onContextReady() {
     // every launch when set.
     if (const char* d = std::getenv("QAKU_DEVICE_ID")) m_deviceId = d;
     else if (!m_dataDir.empty()) { std::string p = qaku::persist::readDeviceId(m_dataDir); if (!p.empty()) m_deviceId = p; }
+    loadOrCreateSignKey();   // our secp256k1 author identity (m_myAddress) — before any fold/authoring
     // Load persisted sessions (registry + each pair.key + log.json), or create a
     // fresh default session on first run. Replaces the old in-memory-only seed.
     loadSessions();
@@ -264,7 +286,10 @@ std::string QakuCoreImpl::shareQr() {
 
 void QakuCoreImpl::setStatus(const std::string& s) { m_status = s; emit statusChanged(s); }
 
-void QakuCoreImpl::pushEvent(Session& s, const Event& e, bool broadcast) {
+void QakuCoreImpl::pushEvent(Session& s, Event e, bool broadcast) {
+    // Sign our OWN events (broadcast) so they carry a verifiable secp256k1 author address
+    // (parity with mobile). Received events (broadcast=false) keep their original signature.
+    if (broadcast && m_signId.valid) qaku::signEvent(m_signId, e);
     // Merge any on-disk events written by a concurrent instance BEFORE appending
     // (see loadPersistedLog) so this write can't clobber theirs. No-op if not
     // persisting or nothing new on disk.
@@ -298,9 +323,10 @@ void QakuCoreImpl::publishState() {
     s["secret"] = cur().haveKey ? hex(cur().identity.secret) : "";
     // The full shareable URI (secret-in-URL, like the original qaku's password-in-URL).
     s["shareUri"] = cur().haveKey ? (std::string(kShareScheme) + hex(cur().identity.secret)) : "";
-    s["deviceId"] = m_deviceId;
+    s["deviceId"] = m_myAddress;   // the copyable IDENTITY is now our signing address (for admin lists)
+    s["address"] = m_myAddress;
     s["currentId"] = m_current;
-    s["role"] = roleFor(cur().log, m_deviceId);
+    s["role"] = roleFor(cur().log, m_myAddress);
     // Transport diagnostics: the content topic we publish/subscribe on, and the
     // autoshard the fleet routes it to. Mobile shows the SAME two for its session;
     // if the shard differs the two nodes are on different pubsub topics and can
@@ -322,7 +348,7 @@ void QakuCoreImpl::publishState() {
             {"id", e.id},
             {"title", title.empty() ? std::string("Untitled Q&A") : title},
             {"fingerprint", e.fingerprint},
-            {"role", roleFor(e.log, m_deviceId)},
+            {"role", roleFor(e.log, m_myAddress)},
             {"questions", cs.value("questionCount", (json::number_integer_t)0)},
             {"open", open},
             {"unread", 0},
@@ -361,7 +387,7 @@ std::string QakuCoreImpl::resync() {
 std::string QakuCoreImpl::adminGuard() {
     json s = qaku::computeState(cur().log);
     if (!s.value("isSession", false)) return "";
-    for (auto& a : s["admins"]) if (a == m_deviceId) return "";
+    for (auto& a : s["admins"]) if (a == m_myAddress) return "";
     return "{\"error\":\"not an owner/admin\"}";
 }
 
@@ -457,11 +483,11 @@ std::string QakuCoreImpl::deleteQuestion(std::string questionId) {
 }
 std::string QakuCoreImpl::upvoteQuestion(std::string questionId, std::string up) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    pushEvent(cur(), mkEvent(qaku::T::UPVOTE, nextHlc(cur()), {{"targetType","question"},{"targetId", questionId},{"up", up!="false"},{"voter", m_deviceId}}), true); return snapshot();
+    pushEvent(cur(), mkEvent(qaku::T::UPVOTE, nextHlc(cur()), {{"targetType","question"},{"targetId", questionId},{"up", up!="false"},{"voter", m_myAddress}}), true); return snapshot();
 }
 std::string QakuCoreImpl::upvoteAnswer(std::string answerId, std::string up) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    pushEvent(cur(), mkEvent(qaku::T::UPVOTE, nextHlc(cur()), {{"targetType","answer"},{"targetId", answerId},{"up", up!="false"},{"voter", m_deviceId}}), true); return snapshot();
+    pushEvent(cur(), mkEvent(qaku::T::UPVOTE, nextHlc(cur()), {{"targetType","answer"},{"targetId", answerId},{"up", up!="false"},{"voter", m_myAddress}}), true); return snapshot();
 }
 
 // --- answers + moderation ---
@@ -492,7 +518,7 @@ std::string QakuCoreImpl::setPollActive(std::string pollId, std::string active) 
 }
 std::string QakuCoreImpl::votePoll(std::string pollId, std::string optionId) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    pushEvent(cur(), mkEvent(qaku::T::POLL_VOTE, nextHlc(cur()), {{"pollId", pollId}, {"optionId", optionId}, {"voter", m_deviceId}}), true); return snapshot();
+    pushEvent(cur(), mkEvent(qaku::T::POLL_VOTE, nextHlc(cur()), {{"pollId", pollId}, {"optionId", optionId}, {"voter", m_myAddress}}), true); return snapshot();
 }
 
 // --- sync / transport ---
