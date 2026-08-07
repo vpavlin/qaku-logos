@@ -162,7 +162,10 @@ export class Sessions {
     if (!force && now - this.lastResync < 4000) return;     // coalesce rapid triggers (force = pull-to-refresh)
     this.lastResync = now;
     this.markSyncing();
-    for (const room of this.rooms.values()) { this.sendSyncReq(room).catch(() => {}); this.seedRoom(room); }
+    // PULL only (ask peers to re-serve). Pushing our whole log (seed) is handled by the
+    // 60s seed timer + replies to incoming SYNC_REQ — keeping resync light so the 30s bg
+    // loop and pull-to-refresh don't seal the whole log and jank the UI.
+    for (const room of this.rooms.values()) this.sendSyncReq(room).catch(() => {});
     try { await transport.storeSync((t, cands) => this.onCandidates(t, cands)); this.emit(); } catch { /* */ }
   }
 
@@ -233,12 +236,16 @@ export class Sessions {
   // Push (re-broadcast) a room's whole log so any SUBSCRIBED peer — e.g. a Basecamp that
   // just joined by secret — catches up WITHOUT having to send a SYNC_REQ (qaku_core never
   // does). Rate-limited per room; skips oversized logs to avoid a re-broadcast storm.
-  private seedRoom(room: Room) {
+  private async seedRoom(room: Room) {
     if (room.log.length === 0 || room.log.length > 500) return;
     const now = Date.now();
-    if (now - (this.lastSeed.get(room.meta.topicHash) || 0) < 20000) return;
+    if (now - (this.lastSeed.get(room.meta.topicHash) || 0) < 30000) return;
     this.lastSeed.set(room.meta.topicHash, now);
-    for (const e of room.log) this.publish(room, { v: 1, type: "EVENT", event: e }).catch(() => {});
+    const log = room.log.slice();
+    for (let i = 0; i < log.length; i++) {
+      this.publish(room, { v: 1, type: "EVENT", event: log[i] }).catch(() => {});
+      if ((i & 7) === 7) await new Promise((r) => setTimeout(r, 25)); // yield every 8 events — never freeze the UI
+    }
   }
   private seedAll() { for (const room of this.rooms.values()) this.seedRoom(room); }
 
@@ -304,9 +311,17 @@ export class Sessions {
   postAnswer(h: string, questionId: string, content: string) { const r = this.byHash.get(h); return r ? this.append(r, "answerPost", { answerId: rid(), questionId, content }) : Promise.resolve(); }
   moderate(h: string, questionId: string, hidden: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "moderate", { questionId, hidden }) : Promise.resolve(); }
 
+  // Memoized fold: the log is append-only, so its length is a reliable "changed" key.
+  // Without this, computeState ran on every render (3s tick + every emit) for a big log,
+  // which is the ongoing sluggishness.
+  private stateCache = new Map<string, { n: number; st: any }>();
   state(topicHash: string): any {
     const r = this.byHash.get(topicHash); if (!r) return { questions: [], polls: [], names: {} };
-    return computeState(r.log);
+    const c = this.stateCache.get(topicHash);
+    if (c && c.n === r.log.length) return c.st;
+    const st = computeState(r.log);
+    this.stateCache.set(topicHash, { n: r.log.length, st });
+    return st;
   }
   secretHex(topicHash: string): string { return this.byHash.get(topicHash)?.meta.secretHex || ""; }
   isAdmin(topicHash: string): boolean { const st = this.state(topicHash); return !!(st.admins && st.admins.indexOf(this.myAddress) >= 0); }
@@ -317,7 +332,7 @@ export class Sessions {
   // Mark every current question in a room as seen (clears its unread badge). Persisted.
   async markSeen(topicHash: string) {
     const r = this.byHash.get(topicHash); if (!r) return;
-    const st = computeState(r.log);
+    const st = this.state(topicHash);
     let maxTs = this.seenTs.get(topicHash) || 0;
     for (const q of (st.questions || [])) if (q.ts > maxTs) maxTs = q.ts;
     this.seenTs.set(topicHash, maxTs);
@@ -328,7 +343,7 @@ export class Sessions {
   // Room list for the home screen: title + question count + open/closed.
   list(): { topicHash: string; title: string; questions: number; owned: boolean; unread: number }[] {
     return [...this.byHash.values()].map((r) => {
-      const st = computeState(r.log);
+      const st = this.state(r.meta.topicHash);
       const qs = st.questions || [];
       const seen = this.seenTs.get(r.meta.topicHash) || 0;
       return { topicHash: r.meta.topicHash, title: (st.session && st.session.title) || r.meta.title, questions: qs.length, owned: st.owner === this.myAddress, unread: qs.filter((q: any) => q.ts > seen).length };

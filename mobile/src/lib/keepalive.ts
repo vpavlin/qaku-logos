@@ -13,8 +13,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const task = async () => {
   // eslint-disable-next-line no-constant-condition
   while (BackgroundService.isRunning()) {
-    try { await sessions.resync(true); } catch { /* */ }
-    await sleep(30000);
+    try { await sessions.resync(false); } catch { /* */ }   // pull-only, rate-limited — light
+    await sleep(60000);
   }
 };
 
