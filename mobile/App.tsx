@@ -3,7 +3,7 @@
 // with optional display names; a small collapsible sync line keeps the diagnostics out
 // of the way. Palette = the original qaku (dark + gold primary + teal accent).
 import React, { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal } from "react-native";
+import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
 import { Sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
@@ -78,6 +78,20 @@ function AppInner() {
     const t = setInterval(() => { refreshPeerInfo().catch(() => {}); force(); }, 3000);
     return () => { un(); clearInterval(t); };
   }, [sessions]);
+
+  // Android hardware back: close any open modal → leave the open Q&A back to the list →
+  // only then let the OS handle it (exit). Without this, back killed the app from anywhere.
+  useEffect(() => {
+    const onBack = () => {
+      if (scanning) { setScanning(false); return true; }
+      if (nameModal) { setNameModal(false); return true; }
+      if (shareHash) { setShareHash(null); return true; }
+      if (openHash) { setOpenHash(null); return true; }
+      return false;
+    };
+    const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
+    return () => sub.remove();
+  }, [scanning, nameModal, shareHash, openHash]);
 
   const rooms = sessions.started ? sessions.list() : [];
   const myName = openHash ? (sessions.state(openHash).names?.[sessions.myAddress] || "") : "";
