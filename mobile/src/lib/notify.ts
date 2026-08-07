@@ -18,7 +18,7 @@ export async function initNotifications(onTap: (topicHash: string) => void) {
   if (Platform.OS === "android") {
     try {
       await Notifications.setNotificationChannelAsync("qaku", {
-        name: "Q&A updates",
+        name: "QAKU",
         importance: Notifications.AndroidImportance.DEFAULT,
       });
     } catch { /* */ }

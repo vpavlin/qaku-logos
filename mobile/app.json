@@ -2,7 +2,7 @@
   "expo": {
     "name": "QAKU",
     "slug": "qaku",
-    "version": "0.1.41",
+    "version": "0.1.42",
     "platforms": [
       "android"
     ],
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "co.logos.qaku",
-      "versionCode": 40,
+      "versionCode": 41,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundImage": "./assets/adaptive-bg.png",
@@ -29,7 +29,13 @@
           "cameraPermission": "QAKU scans the QR shown by another device to join and sync a Q&A."
         }
       ],
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#ffc533"
+        }
+      ],
       "./plugins/withForegroundService.js"
     ],
     "extra": {

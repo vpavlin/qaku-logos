@@ -206,7 +206,10 @@ export class Sessions {
     if (event.type === "question.add" && event.dev !== this.myAddress && this.starred.has(room.meta.topicHash)
         && this.connectedAt > 0 && Date.now() - this.connectedAt > 12000) {
       this.notifyAttempts++;
-      this.onNewQuestion?.(room.meta.topicHash, (event.payload && event.payload.content) || "New question", this.metaTitle(room.meta.topicHash));
+      const st = this.state(room.meta.topicHash);
+      // Prefer the folded Q&A title; fall back to a real meta title; never the "Q&A" placeholder.
+      const title = (st.session && st.session.title) || (room.meta.title && room.meta.title !== "Q&A" ? room.meta.title : "QAKU");
+      this.onNewQuestion?.(room.meta.topicHash, (event.payload && event.payload.content) || "New question", title);
     }
     this.emit();
   }
