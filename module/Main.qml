@@ -867,6 +867,8 @@ Item {
                                         }
                                         LogosText { text: root.shortAddr(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
                                         LogosText { text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; opacity: 0.85 }
+                                        // Our own question not yet dispatched to the network (see qaku_core m_unpublished).
+                                        LogosText { visible: !!modelData.queued; text: "·  ⏳ queued"; color: root.qkGold; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightBold }
                                     }
                                 }
 

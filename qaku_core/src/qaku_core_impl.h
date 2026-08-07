@@ -135,7 +135,7 @@ private:
     void ingestPayload(const std::string& contentTopic, const std::string& payloadB64, bool channelPath = true);
     bool openAndPush(Session& s, const std::string& sealed);
     void sealAndSend(Session& s, const qaku::Event& e);
-    void deliverySend(const std::string& topic, const std::string& sealedB64);
+    bool deliverySend(const std::string& topic, const std::string& sealedB64);   // true iff dispatched to the channel
     void applySecret(Session& s, const qaku::Bytes& secret, bool persist);
 
     // --- state ---
@@ -150,6 +150,14 @@ private:
     std::string m_status = "Starting...";
     bool m_nodeReady = false;
     int m_sendRepr = 0;
+    // Event ids we AUTHORED but haven't dispatched to the reliable channel yet ("queued").
+    // Durable (<dataDir>/unpublished.json). Cleared when sealAndSend hands the event to the
+    // channel while connected — desktop delivery exposes no mesh/ACK signal, so "published"
+    // here means "sent to the channel", the best available on this platform. See mobile
+    // sessions.ts (unconfirmed) for the store/mesh-confirmed counterpart.
+    std::set<std::string> m_unpublished;
+    void saveUnpublished();
+    void loadUnpublished();
 
     // diagnostic counters (surfaced in snapshot, per logos-distributed-debugging)
     long m_rxRaw = 0, m_rxSeen = 0, m_rxOpened = 0, m_rxOpenFail = 0, m_rxNew = 0, m_rxDup = 0, m_txTotal = 0;

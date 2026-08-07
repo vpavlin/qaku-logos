@@ -201,6 +201,7 @@ void QakuCoreImpl::onContextReady() {
     // Load persisted sessions (registry + each pair.key + log.json), or create a
     // fresh default session on first run. Replaces the old in-memory-only seed.
     loadSessions();
+    loadUnpublished();   // restore the "queued" set so a not-yet-published question survives restart
     setStatus("Ready");
     bootstrapDelivery();
     // Headless hub self-drive: a QTimer on the event-loop thread (NEVER a
@@ -273,13 +274,23 @@ void QakuCoreImpl::pushEvent(Session& s, const Event& e, bool broadcast) {
     s.log = qaku::mergeEvents(s.log, { e });
     if (e.hlc.wall > s.wall) { s.wall = e.hlc.wall; s.ctr = e.hlc.ctr; }
     savePersistedLog(s);   // rewrite <dir>/log.json (small; off any IPC hot path)
-    if (broadcast) sealAndSend(s, e);
+    if (broadcast) {
+        // Our own new event: mark "queued" (durable) BEFORE sending; sealAndSend clears it
+        // once dispatched to the channel. If not connected yet it stays queued and the
+        // node-up reseed / periodic resync re-sends (and clears) it.
+        m_unpublished.insert(e.id); saveUnpublished();
+        sealAndSend(s, e);
+    }
     publishState();
 }
 
 void QakuCoreImpl::publishState() {
     // Current session detail (the main pane renders these top-level fields).
     json s = qaku::computeState(cur().log);
+    // Tag each question with its local send state so the view can show a "queued" badge on
+    // our own not-yet-published questions (evId = the source event id; see qaku_engine).
+    if (s.contains("questions") && s["questions"].is_array())
+        for (auto& q : s["questions"]) q["queued"] = m_unpublished.count(q.value("evId", "")) > 0;
     s["status"] = m_status;
     s["fingerprint"] = cur().haveKey ? cur().fingerprint : "";
     // The raw session secret as hex: THIS is the pairing code, meant to be shared
@@ -594,15 +605,19 @@ void QakuCoreImpl::joinTransport(Session& s) {
 }
 
 void QakuCoreImpl::sealAndSend(Session& s, const Event& e) {
-    if (!s.haveKey || !m_nodeReady) return;
+    if (!s.haveKey || !m_nodeReady) return;   // not connected → our own event stays "queued"
     std::string plain = qaku::encodeEvent(e);
     qaku::Bytes sealed = qaku::seal(s.identity, qaku::Bytes(plain.begin(), plain.end()), s.topic);
-    deliverySend(s.topic, b64(sealed));
+    bool dispatched = deliverySend(s.topic, b64(sealed));
+    // Handed to the reliable channel while connected → clear "queued" (only affects our own
+    // authored events; received/reseeded ids aren't in the set). All synchronous on the Qt
+    // thread — no cross-thread callback needed.
+    if (dispatched && m_unpublished.erase(e.id)) saveUnpublished();
     m_txTotal++;
 }
 
-void QakuCoreImpl::deliverySend(const std::string& topic, const std::string& sealedB64) {
-    if (!m_nodeReady) return;
+bool QakuCoreImpl::deliverySend(const std::string& topic, const std::string& sealedB64) {
+    if (!m_nodeReady) return false;
     // SINGLE-base64, matching KYM's proven kym_core exactly. We hand the transport
     // the base64 TEXT as bytes (bytesPayload); delivery_module base64-encodes that
     // once more on the wire, so a peer decodes ONCE to reach our base64 text and a
@@ -619,10 +634,26 @@ void QakuCoreImpl::deliverySend(const std::string& topic, const std::string& sea
             return true;
         } catch (...) { return false; }
     };
-    if (m_sendRepr == 1 || m_sendRepr == 2) { if (attempt(m_sendRepr)) return; m_sendRepr = 0; }
-    if (attempt(1)) { m_sendRepr = 1; return; }
-    if (attempt(2)) { m_sendRepr = 2; return; }
+    if (m_sendRepr == 1 || m_sendRepr == 2) { if (attempt(m_sendRepr)) return true; m_sendRepr = 0; }
+    if (attempt(1)) { m_sendRepr = 1; return true; }
+    if (attempt(2)) { m_sendRepr = 2; return true; }
     fprintf(stderr, "QAKUTX deliverySend: no working payload representation\n");
+    return false;
+}
+
+// Persist / restore the "queued" (unpublished) id set. Global (event ids are UUIDs, unique
+// across sessions). Best-effort: a missing/corrupt file yields an empty set.
+void QakuCoreImpl::saveUnpublished() {
+    if (m_dataDir.empty()) return;
+    json a = json::array(); for (const auto& id : m_unpublished) a.push_back(id);
+    std::ofstream f(m_dataDir + "/unpublished.json", std::ios::trunc); if (f) f << a.dump();
+}
+void QakuCoreImpl::loadUnpublished() {
+    if (m_dataDir.empty()) return;
+    std::ifstream f(m_dataDir + "/unpublished.json"); if (!f) return;
+    try { json a = json::parse(std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()));
+          if (a.is_array()) { m_unpublished.clear(); for (auto& x : a) if (x.is_string()) m_unpublished.insert(x.get<std::string>()); }
+    } catch (...) { /* ignore */ }
 }
 
 // AEAD-open one sealed byte-string with a session's key, then dispatch on the

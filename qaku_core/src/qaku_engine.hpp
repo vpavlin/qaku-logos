@@ -111,8 +111,8 @@ inline json computeState(const std::vector<Event>& evs) {
     auto adm = admitEvents(evs);
     const auto& ordered = adm.admitted;
 
-    struct QV { std::string id, content, author; long long ts=0; bool moderated=false; std::string accepted; bool deleted=false; };
-    struct AV { std::string id, questionId, content, author; long long ts=0; bool accepted=false; bool deleted=false; };
+    struct QV { std::string id, evId, content, author; long long ts=0; bool moderated=false; std::string accepted; bool deleted=false; };
+    struct AV { std::string id, evId, questionId, content, author; long long ts=0; bool accepted=false; bool deleted=false; };
     struct PV { std::string id, title, question; json options; bool active=false; long long ts=0; bool deleted=false; std::map<std::string,std::string> votes; };
 
     bool haveSession=false; json session=nullptr;
@@ -139,7 +139,7 @@ inline json computeState(const std::vector<Event>& evs) {
             }
         } else if (t == T::QUESTION_ADD) {
             std::string id = p.value("questionId","");
-            if (!questions.count(id)) { questions[id] = QV{id, p.value("content",""), p.value("author", e.hlc.dev), e.hlc.wall, false, "", false}; qOrder.push_back(id); }
+            if (!questions.count(id)) { questions[id] = QV{id, e.id, p.value("content",""), p.value("author", e.hlc.dev), e.hlc.wall, false, "", false}; qOrder.push_back(id); }
         } else if (t == T::QUESTION_EDIT) {
             auto it = questions.find(p.value("questionId","")); if (it!=questions.end() && p.contains("content")) it->second.content = p["content"];
         } else if (t == T::QUESTION_DELETE) {
@@ -150,7 +150,7 @@ inline json computeState(const std::vector<Event>& evs) {
             up[p.value("targetId","")][p.value("voter", e.hlc.dev)] = p.value("up", true);
         } else if (t == T::ANSWER_POST) {
             std::string id = p.value("answerId","");
-            if (!answers.count(id)) { answers[id] = AV{id, p.value("questionId",""), p.value("content",""), p.value("author", e.hlc.dev), e.hlc.wall, false, false}; aOrder.push_back(id); }
+            if (!answers.count(id)) { answers[id] = AV{id, e.id, p.value("questionId",""), p.value("content",""), p.value("author", e.hlc.dev), e.hlc.wall, false, false}; aOrder.push_back(id); }
         } else if (t == T::ANSWER_EDIT) {
             auto it = answers.find(p.value("answerId","")); if (it!=answers.end() && p.contains("content")) it->second.content = p["content"];
         } else if (t == T::ANSWER_DELETE) {
@@ -180,7 +180,7 @@ inline json computeState(const std::vector<Event>& evs) {
     std::map<std::string, std::vector<json>> ansByQ;
     for (auto& id : aOrder) { auto& a = answers[id]; if (a.deleted) continue;
         auto voters = upvotersOf(a.id);
-        json aj = {{"id",a.id},{"questionId",a.questionId},{"content",a.content},{"author",a.author},{"ts",a.ts},{"accepted",a.accepted},{"upvotes",(long long)voters.size()},{"upvoters",voters}};
+        json aj = {{"id",a.id},{"evId",a.evId},{"questionId",a.questionId},{"content",a.content},{"author",a.author},{"ts",a.ts},{"accepted",a.accepted},{"upvotes",(long long)voters.size()},{"upvoters",voters}};
         ansByQ[a.questionId].push_back(aj);
     }
     for (auto& kv : ansByQ) std::sort(kv.second.begin(), kv.second.end(), [](const json& x, const json& y){
@@ -189,7 +189,7 @@ inline json computeState(const std::vector<Event>& evs) {
     json qs = json::array();
     for (auto& id : qOrder) { auto& q = questions[id]; if (q.deleted) continue;
         auto voters = upvotersOf(q.id);
-        json qj = {{"id",q.id},{"content",q.content},{"author",q.author},{"ts",q.ts},{"moderated",q.moderated},
+        json qj = {{"id",q.id},{"evId",q.evId},{"content",q.content},{"author",q.author},{"ts",q.ts},{"moderated",q.moderated},
                    {"acceptedAnswerId", q.accepted.empty()? json(nullptr): json(q.accepted)},
                    {"upvotes",(long long)voters.size()},{"upvoters",voters},
                    {"answers", ansByQ.count(q.id)? json(ansByQ[q.id]) : json::array()}};
