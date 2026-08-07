@@ -52,6 +52,14 @@ function AppInner() {
   const sessions = useMemo(() => new Sessions(), []);
   const [, tick] = useState(0);
   const force = () => tick((n) => n + 1);
+  // Coalesce bursts of sync events into at most one re-render per 150ms (a store pull or
+  // seed can fire emit() dozens of times in a moment).
+  const forceScheduled = React.useRef(false);
+  const scheduleForce = () => {
+    if (forceScheduled.current) return;
+    forceScheduled.current = true;
+    setTimeout(() => { forceScheduled.current = false; force(); }, 150);
+  };
   const [status, setStatus] = useState("starting…");
   const [openHash, setOpenHash] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -76,7 +84,7 @@ function AppInner() {
   const [permission, requestPermission] = useCameraPermissions();
 
   useEffect(() => {
-    const un = sessions.subscribe(force);
+    const un = sessions.subscribe(scheduleForce);
     sessions.start(setStatus).catch((e) => setError("Start failed: " + (e?.message || e)));
     const t = setInterval(() => { refreshPeerInfo().catch(() => {}); force(); }, 3000);
     return () => { un(); clearInterval(t); };
@@ -96,8 +104,8 @@ function AppInner() {
     return () => sub.remove();
   }, [scanning, nameModal, shareHash, openHash]);
 
-  const rooms = sessions.started ? sessions.list() : [];
-  const myName = openHash ? (sessions.state(openHash).names?.[sessions.myAddress] || "") : "";
+  // Only fold ALL rooms on the home screen; inside a room we fold that one room once (below).
+  const rooms = (!openHash && sessions.started) ? sessions.list() : [];
 
   const doJoin = async (raw?: string) => {
     setBusy(true); setError("");
@@ -160,9 +168,11 @@ function AppInner() {
   }
 
   // ---------- ROOM ----------
-  const st = sessions.state(openHash);
+  const st = sessions.state(openHash);                 // fold ONCE per render; derive the rest
   const allQ = st.questions || [];
-  const admin = sessions.isAdmin(openHash);
+  const names = st.names || {};
+  const nameOf = (a: string) => names[a] || shortAddr(a);
+  const admin = (st.admins || []).indexOf(sessions.myAddress) >= 0;
   const answeredOf = (x: any) => (x.answers && x.answers.length > 0) || !!x.acceptedAnswerId;
   const visibleQ = allQ.filter((x: any) => !x.moderated);
   const filteredQ = filterBy === "unanswered" ? visibleQ.filter((x: any) => !answeredOf(x))
@@ -175,7 +185,7 @@ function AppInner() {
   };
   const shownQ = [...filteredQ].sort(sortFns[sortBy]);
   const hiddenQ = allQ.filter((x: any) => x.moderated);
-  const title = (st.session && st.session.title) || rooms.find((r) => r.topicHash === openHash)?.title || "Q&A";
+  const title = (st.session && st.session.title) || sessions.metaTitle(openHash) || "Q&A";
   const renderQ = (qq: any) => (
     <View key={qq.id} style={[s.qCard, qq.acceptedAnswerId && { borderColor: C.accent }, qq.moderated && { opacity: 0.55 }]}>
       <TouchableOpacity style={s.upvote} onPress={() => sessions.upvote(openHash!, qq.id).catch(() => {})}>
@@ -184,14 +194,14 @@ function AppInner() {
       <View style={{ flex: 1 }}>
         <Text style={s.qText}>{qq.content}</Text>
         <View style={s.byline}>
-          <Avatar addr={qq.author} name={sessions.displayName(openHash!, qq.author)} size={18} />
-          <Text style={s.bylineName} numberOfLines={1}>{sessions.displayName(openHash!, qq.author)}</Text>
+          <Avatar addr={qq.author} name={nameOf(qq.author)} size={18} />
+          <Text style={s.bylineName} numberOfLines={1}>{nameOf(qq.author)}</Text>
           {qq.verified ? <Text style={s.verified}>✓</Text> : null}
         </View>
         {(qq.answers || []).map((a: any) => (
           <View key={a.id} style={s.answer}>
             <Text style={[s.answerText, a.accepted && { color: C.accent }]}>{a.accepted ? "✓ " : "↳ "}{a.content}</Text>
-            <View style={s.byline}><Text style={s.bylineName}>{sessions.displayName(openHash!, a.author)}</Text>{a.verified ? <Text style={s.verified}>✓</Text> : null}</View>
+            <View style={s.byline}><Text style={s.bylineName}>{nameOf(a.author)}</Text>{a.verified ? <Text style={s.verified}>✓</Text> : null}</View>
           </View>
         ))}
         {admin && (answering === qq.id ? (
@@ -215,7 +225,7 @@ function AppInner() {
         <Text style={s.roomHeadTitle} numberOfLines={1}>{title}</Text>
         <TouchableOpacity onPress={() => setShareHash(openHash)}><Text style={s.share}>Share</Text></TouchableOpacity>
       </View>
-      {(myName || sessions.myName) ? null : <TouchableOpacity onPress={() => { setNameText(sessions.myName); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
+      {(sessions.myName || names[sessions.myAddress]) ? null : <TouchableOpacity onPress={() => { setNameText(sessions.myName); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
       <View style={s.askRow}>
         <TextInput style={s.input} placeholder="Ask a question…" placeholderTextColor={C.muted} value={q} onChangeText={setQ} />
         <TouchableOpacity style={s.btnPrimary} onPress={() => { const v = q.trim(); if (v) sessions.ask(openHash, v).catch(() => {}); setQ(""); }}><Text style={s.btnPrimaryT}>Ask</Text></TouchableOpacity>

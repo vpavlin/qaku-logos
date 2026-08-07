@@ -102,7 +102,7 @@ export class Sessions {
     // Periodically push our logs so a peer that subscribes LATER (e.g. Basecamp joining
     // by secret) catches up even though it never sends a SYNC_REQ. Rate-limited inside.
     if (this.seedTimer) clearInterval(this.seedTimer);
-    this.seedTimer = setInterval(() => this.seedAll(), 25000);
+    this.seedTimer = setInterval(() => this.seedAll(), 60000);
     setTimeout(() => this.seedAll(), 4000);
   }
 
@@ -238,6 +238,8 @@ export class Sessions {
   secretHex(topicHash: string): string { return this.byHash.get(topicHash)?.meta.secretHex || ""; }
   isAdmin(topicHash: string): boolean { const st = this.state(topicHash); return !!(st.admins && st.admins.indexOf(this.myAddress) >= 0); }
   displayName(topicHash: string, addr: string): string { const st = this.state(topicHash); return (st.names && st.names[addr]) || shortAddr(addr); }
+  // Cheap title (no fold) for the room header fallback — avoids computeState in render.
+  metaTitle(topicHash: string): string { return this.byHash.get(topicHash)?.meta.title || ""; }
 
   // Room list for the home screen: title + question count + open/closed.
   list(): { topicHash: string; title: string; questions: number; owned: boolean }[] {
