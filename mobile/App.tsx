@@ -105,7 +105,9 @@ function AppInner() {
   }, [scanning, nameModal, shareHash, openHash]);
 
   // Only fold ALL rooms on the home screen; inside a room we fold that one room once (below).
-  const rooms = (!openHash && sessions.started) ? sessions.list() : [];
+  // Gated on `loaded` (local state ready) — NOT `started` (connected) — so the list shows
+  // instantly from disk while the node connects in the background.
+  const rooms = (!openHash && sessions.loaded) ? sessions.list() : [];
 
   const doJoin = async (raw?: string) => {
     setBusy(true); setError("");

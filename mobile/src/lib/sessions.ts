@@ -53,7 +53,8 @@ export class Sessions {
   private saveTimers = new Map<string, any>();
   private lastSeed = new Map<string, number>();
   private seedTimer: any = null;
-  started = false;
+  loaded = false;   // local state (registry + logs) is in memory — UI can render now
+  started = false;  // the node is up — safe to join/publish/sync
   myAddress = "";
   myName = "";
   listeners = new Set<() => void>();
@@ -85,25 +86,38 @@ export class Sessions {
 
   // Bring the node up on every joined room's topic; then pull history + ask peers.
   async start(onStatus?: (s: string) => void) {
+    // 1) LOCAL FIRST — identity + every persisted Q&A + its log, from disk. No network
+    // wait, so the UI can render the list immediately.
     this.identity = await getIdentity();
     this.myAddress = this.identity.address;
     this.deviceId = await getDeviceId();
     try { this.myName = (await SecureStore.getItemAsync("qaku-myname")) || ""; } catch { /* */ }
     for (const meta of await this.loadRegistry()) {
       const room = this.makeRoom(meta);
-      await this.hydrate(room);   // restore the persisted log BEFORE we go live
+      await this.hydrate(room);   // restore the persisted log
       this.rooms.set(room.topic, room); this.byHash.set(room.meta.topicHash, room);
     }
-    const topics = [...this.rooms.keys()];
-    await transport.start({ deviceId: this.deviceId, topics, onStatus, onReceive: (t, c) => this.onCandidates(t, c) });
-    this.started = true;
-    this.emit();
-    for (const room of this.rooms.values()) this.syncRoom(room);
-    // Periodically push our logs so a peer that subscribes LATER (e.g. Basecamp joining
-    // by secret) catches up even though it never sends a SYNC_REQ. Rate-limited inside.
-    if (this.seedTimer) clearInterval(this.seedTimer);
-    this.seedTimer = setInterval(() => this.seedAll(), 60000);
-    setTimeout(() => this.seedAll(), 4000);
+    this.loaded = true;
+    this.emit();                  // UI shows the Q&As from disk NOW
+    // 2) CONNECT in the background; content is already on screen while the node comes up.
+    this.connect(onStatus);
+  }
+
+  private async connect(onStatus?: (s: string) => void) {
+    try {
+      await transport.start({ deviceId: this.deviceId, topics: [...this.rooms.keys()], onStatus, onReceive: (t, c) => this.onCandidates(t, c) });
+      this.started = true;
+      this.emit();
+      await transport.join([...this.rooms.keys()]).catch(() => {}); // catch rooms added during bring-up
+      for (const room of this.rooms.values()) this.syncRoom(room);
+      // Periodically push our logs so a peer that subscribes LATER (e.g. Basecamp joining
+      // by secret) catches up even though it never sends a SYNC_REQ. Rate-limited inside.
+      if (this.seedTimer) clearInterval(this.seedTimer);
+      this.seedTimer = setInterval(() => this.seedAll(), 60000);
+      setTimeout(() => this.seedAll(), 4000);
+    } catch (e: any) {
+      onStatus?.("offline — reopen to retry");
+    }
   }
 
   private syncRoom(room: Room) {
