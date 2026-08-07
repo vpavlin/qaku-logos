@@ -11,20 +11,29 @@
 import { mergeEvents, computeState } from "../../../packages/engine/src/engine.mjs";
 // @ts-ignore
 import { Clock, ev } from "../../../packages/contract/src/index.mjs";
+// @ts-ignore
+import { signEvent } from "../../../packages/contract/src/identity.mjs";
 import { encodeEvent } from "./wire";
 import { startNode, publishSealed, sealEvent, storeSync, sendSyncReq, counters } from "./delivery";
 import { getDeviceId } from "./device";
+import { getIdentity, Identity } from "./identity";
 
 export class Session {
   log: any[] = [];
   ids = new Set<string>();
   clock: any;
   device = "phone";
+  identity: Identity | null = null;
+  myAddress = "";
   listeners = new Set<() => void>();
 
   async start(secret: Uint8Array, onStatus?: (s: string) => void) {
     this.device = await getDeviceId();
-    this.clock = new Clock(this.device);
+    // Load this device's signing identity; the HLC `dev` (and thus every event's author)
+    // IS our address, so authorship + admin/creator gating are cryptographically bound.
+    this.identity = await getIdentity();
+    this.myAddress = this.identity.address;
+    this.clock = new Clock(this.identity.address);
     // The delivery layer now decodes + dispatches: onEvent gets a decoded event's
     // payload, onSyncReq asks us to re-serve our whole log to a joining peer.
     await startNode(secret, (event) => this.ingestEvent(event), onStatus, (from) => this.serveLog(from));
@@ -65,9 +74,12 @@ export class Session {
     }
   }
 
-  // Author a local event: stamp HLC, merge, seal + publish. EXACTLY like KYM.
+  // Author a local event: stamp HLC, SIGN with our key (stamps hlc.dev = our address +
+  // pub + sig), merge, seal + publish. The signature travels in the event JSON, so peers
+  // (and our own fold) verify authorship before admitting.
   async append(type: keyof typeof ev, payload: any) {
     const event = (ev as any)[type](this.clock.send(), payload);
+    if (this.identity) signEvent(this.identity, event);
     this.merge(event);
     this.emit();
     await publishSealed(sealEvent(encodeEvent(event)));
