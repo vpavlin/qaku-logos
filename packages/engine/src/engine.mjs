@@ -16,9 +16,17 @@ import { verifyEvent } from "../../contract/src/identity.mjs";
 let STRICT_SIG = false;
 export function setSignatureMode({ strict } = {}) { STRICT_SIG = !!strict; }
 export function getSignatureMode() { return { strict: STRICT_SIG }; }
+function sigVerified(e) { return !!(e && e.sig) && verifyEvent(e); }
 function sigOk(e) {
-  if (e && e.sig) return verifyEvent(e);   // signed → must be cryptographically valid
-  return !STRICT_SIG;                        // unsigned → legacy-admit unless strict
+  // PARTICIPANT events (question/upvote/profile) are open to anyone with the secret — a bad
+  // or missing signature must NEVER drop them (that silently hid a re-received copy of your
+  // own question; basecamp's C++ engine has no sig check, so it kept showing it → the mobile
+  // side was stricter and lost it). They just render without a "verified ✓". GATED events
+  // (answer/moderate/admin/config/session) still require a valid signature so forgery of
+  // privileged actions stays blocked.
+  if (e && PARTICIPANT_EVENTS.has(e.type)) return true;
+  if (e && e.sig) return verifyEvent(e);   // gated + signed → must be cryptographically valid
+  return !STRICT_SIG;                        // gated + unsigned → legacy-admit unless strict
 }
 
 /**
@@ -161,7 +169,7 @@ export function computeState(events) {
       case EventType.QUESTION_ADD: {
         const cur = questions.get(p.questionId);
         if (cur) cur.view = { ...cur.view, ...p };
-        else questions.set(p.questionId, { view: { id: p.questionId, evId: e.id, content: p.content, author: p.author || e.hlc.dev, verified: !!e.sig, ts: e.hlc.wall, moderated: false, acceptedAnswerId: null }, deleted: false });
+        else questions.set(p.questionId, { view: { id: p.questionId, evId: e.id, content: p.content, author: p.author || e.hlc.dev, verified: sigVerified(e), ts: e.hlc.wall, moderated: false, acceptedAnswerId: null }, deleted: false });
         break;
       }
       case EventType.QUESTION_EDIT: {
@@ -183,7 +191,7 @@ export function computeState(events) {
       case EventType.ANSWER_POST: {
         const cur = answers.get(p.answerId);
         if (cur) cur.view = { ...cur.view, ...p };
-        else answers.set(p.answerId, { view: { id: p.answerId, evId: e.id, questionId: p.questionId, content: p.content, author: p.author || e.hlc.dev, verified: !!e.sig, ts: e.hlc.wall, accepted: false }, deleted: false });
+        else answers.set(p.answerId, { view: { id: p.answerId, evId: e.id, questionId: p.questionId, content: p.content, author: p.author || e.hlc.dev, verified: sigVerified(e), ts: e.hlc.wall, accepted: false }, deleted: false });
         break;
       }
       case EventType.ANSWER_EDIT: {
