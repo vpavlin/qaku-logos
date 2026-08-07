@@ -168,6 +168,8 @@ Item {
     // ---- sort / filter / hidden (OG qaku parity) ----
     property string sortBy: "top"      // top | new | old
     property string filterBy: "all"    // all | unanswered | answered
+    property bool shareOpen: false     // the Share card is collapsed by default (declutter)
+    property bool showDiag: false      // the SYNC/TRANSPORT diagnostics are hidden by default
     property bool hiddenOpen: false
     function answeredOf(q) { return (q.answers && q.answers.length > 0) || (q.acceptedAnswerId ? true : false); }
     readonly property var visibleQuestions: {
@@ -456,12 +458,14 @@ Item {
                     spacing: Theme.spacing.tiny
                     visible: !!root.st.contentTopic
                     LogosText {
-                        text: "SYNC / TRANSPORT"
+                        text: (root.showDiag ? "▾  " : "▸  ") + "SYNC / TRANSPORT"
                         color: Theme.palette.textTertiary
                         font.pixelSize: Theme.typography.badgeText
                         font.weight: Theme.typography.weightMedium
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.showDiag = !root.showDiag }
                     }
                     LogosText {
+                        visible: root.showDiag
                         Layout.fillWidth: true
                         text: "topic " + (root.st.contentTopic || "-")
                         color: Theme.palette.textSecondary
@@ -470,6 +474,7 @@ Item {
                         wrapMode: Text.WrapAnywhere
                     }
                     LogosText {
+                        visible: root.showDiag
                         Layout.fillWidth: true
                         text: "shard " + (root.st.shard !== undefined ? root.st.shard : "-")
                               + "   /waku/2/rs/2/" + (root.st.shard !== undefined ? root.st.shard : "?")
@@ -478,6 +483,7 @@ Item {
                         font.family: "monospace"
                     }
                     LogosText {
+                        visible: root.showDiag
                         Layout.fillWidth: true
                         text: {
                             var q = root.st.sync || {};
@@ -589,6 +595,12 @@ Item {
                         }
                     }
                     LogosButton {
+                        text: root.shareOpen ? "Hide share" : "Share"
+                        implicitWidth: 110; implicitHeight: 40
+                        visible: root.secret.length > 0
+                        onClicked: root.shareOpen = !root.shareOpen
+                    }
+                    LogosButton {
                         visible: root.isAdmin
                         text: root.sessionOpen ? "Close" : "Open"
                         implicitWidth: 110; implicitHeight: 40
@@ -596,9 +608,9 @@ Item {
                     }
                 }
 
-                // ---- Share card (pairing secret) ----
+                // ---- Share card (pairing secret) — collapsed by default; toggled by the header "Share" button ----
                 Rectangle {
-                    visible: root.secret.length > 0
+                    visible: root.secret.length > 0 && root.shareOpen
                     Layout.fillWidth: true
                     radius: Theme.spacing.radiusMedium
                     color: Theme.palette.backgroundInset
@@ -815,6 +827,8 @@ Item {
                     }
 
                     delegate: Rectangle {
+                        id: qCard
+                        property bool answering: false   // inline answer box opens on demand (declutter)
                         width: qList.width
                         radius: Theme.spacing.radiusMedium
                         color: root.qkSurface
@@ -872,13 +886,6 @@ Item {
                                     }
                                 }
 
-                                LogosButton {
-                                    visible: root.isAdmin
-                                    Layout.alignment: Qt.AlignTop
-                                    text: modelData.moderated ? "Show" : "Hide"
-                                    implicitWidth: 78; implicitHeight: 36
-                                    onClicked: root.act("moderate", [modelData.id, modelData.moderated ? "false" : "true"], "Could not moderate")
-                                }
                             }
 
                             Repeater {
@@ -902,8 +909,27 @@ Item {
                                 }
                             }
 
+                            // compact admin actions — subtle text links, no dead input box
                             RowLayout {
                                 visible: root.isAdmin
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 58 + Theme.spacing.medium
+                                spacing: Theme.spacing.large
+                                LogosText {
+                                    text: qCard.answering ? "Cancel" : "Answer"
+                                    color: root.qkTeal; font.pixelSize: Theme.typography.secondaryText
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: qCard.answering = !qCard.answering }
+                                }
+                                LogosText {
+                                    text: modelData.moderated ? "Show" : "Hide"
+                                    color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.act("moderate", [modelData.id, modelData.moderated ? "false" : "true"], "Could not moderate") }
+                                }
+                                Item { Layout.fillWidth: true }
+                            }
+
+                            RowLayout {
+                                visible: root.isAdmin && qCard.answering
                                 Layout.fillWidth: true
                                 Layout.leftMargin: 58 + Theme.spacing.medium
                                 spacing: Theme.spacing.small
@@ -911,13 +937,13 @@ Item {
                                     id: ansField
                                     Layout.fillWidth: true
                                     implicitHeight: 36
-                                    placeholderText: "Answer..."
+                                    placeholderText: "Write an answer..."
                                 }
                                 LogosButton {
-                                    text: "Answer"
-                                    implicitWidth: 92; implicitHeight: 36
+                                    text: "Post"
+                                    implicitWidth: 78; implicitHeight: 36
                                     enabled: ansField.text.length > 0
-                                    onClicked: { root.act("postAnswer", [modelData.id, ansField.text], "Could not post answer"); ansField.text = ""; }
+                                    onClicked: { root.act("postAnswer", [modelData.id, ansField.text], "Could not post answer"); ansField.text = ""; qCard.answering = false; }
                                 }
                             }
                         }
