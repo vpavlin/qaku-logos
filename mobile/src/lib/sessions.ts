@@ -51,6 +51,8 @@ export class Sessions {
   private identity: Identity | null = null;
   private deviceId = "";
   private saveTimers = new Map<string, any>();
+  private lastSeed = new Map<string, number>();
+  private seedTimer: any = null;
   started = false;
   myAddress = "";
   myName = "";
@@ -97,10 +99,16 @@ export class Sessions {
     this.started = true;
     this.emit();
     for (const room of this.rooms.values()) this.syncRoom(room);
+    // Periodically push our logs so a peer that subscribes LATER (e.g. Basecamp joining
+    // by secret) catches up even though it never sends a SYNC_REQ. Rate-limited inside.
+    if (this.seedTimer) clearInterval(this.seedTimer);
+    this.seedTimer = setInterval(() => this.seedAll(), 25000);
+    setTimeout(() => this.seedAll(), 4000);
   }
 
   private syncRoom(room: Room) {
-    this.sendSyncReq(room).catch(() => {});
+    this.sendSyncReq(room).catch(() => {});                 // pull: ask peers to re-serve
+    setTimeout(() => this.seedRoom(room), 1500);            // push: re-broadcast ours (for already-subscribed peers)
     transport.storeSync((t, cands) => this.onCandidates(t, cands)).then(() => this.emit()).catch(() => {});
   }
 
@@ -146,8 +154,20 @@ export class Sessions {
   }
   private serveLog(room: Room, from: string) {
     if (from && from === this.deviceId) return;
+    this.seedRoom(room);
+  }
+
+  // Push (re-broadcast) a room's whole log so any SUBSCRIBED peer — e.g. a Basecamp that
+  // just joined by secret — catches up WITHOUT having to send a SYNC_REQ (qaku_core never
+  // does). Rate-limited per room; skips oversized logs to avoid a re-broadcast storm.
+  private seedRoom(room: Room) {
+    if (room.log.length === 0 || room.log.length > 500) return;
+    const now = Date.now();
+    if (now - (this.lastSeed.get(room.meta.topicHash) || 0) < 20000) return;
+    this.lastSeed.set(room.meta.topicHash, now);
     for (const e of room.log) this.publish(room, { v: 1, type: "EVENT", event: e }).catch(() => {});
   }
+  private seedAll() { for (const room of this.rooms.values()) this.seedRoom(room); }
 
   // Author a signed event into a room: stamp HLC → sign (author=our address) → fold →
   // seal + publish. Returns immediately after local fold; publish is best-effort async.
