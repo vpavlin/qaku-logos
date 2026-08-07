@@ -142,13 +142,25 @@ Item {
     onAwaitingStateChanged: { root.awaitTimedOut = false; if (root.awaitingState) awaitTimer.restart(); else awaitTimer.stop(); }
     Timer { id: awaitTimer; interval: 25000; onTriggered: root.awaitTimedOut = true }
 
+    // ---- OG qaku palette (match the mobile app: dark + gold + teal) ----
+    readonly property color qkBg: "#141415"
+    readonly property color qkSurface: "#1a1a1d"
+    readonly property color qkSurface2: "#26262b"
+    readonly property color qkBorder: "#303035"
+    readonly property color qkGold: "#ffc533"
+    readonly property color qkTeal: "#50b986"
+    readonly property color qkText: "#ffffff"
+    readonly property color qkMuted: "#9f9fab"
+    function shortAddr(a) { return (a && a.length > 12) ? (a.substring(0, 6) + "…" + a.substring(a.length - 4)) : (a || ""); }
+    function hueFor(a) { var h = 0; a = a || ""; for (var i = 2; i < Math.min(a.length, 10); i++) h = (h * 31 + a.charCodeAt(i)) % 360; return h; }
+
     // ---- toast (mutation errors surfaced instead of swallowed) ----
     property string toastText: ""
     Timer { id: toastTimer; interval: 3200; onTriggered: root.toastText = "" }
     function toast(t) { root.toastText = t; toastTimer.restart(); }
     function act(m, a, err) { if (!root.mutate(m, a)) root.toast(err || "Action failed - check qaku_core"); }
 
-    Rectangle { anchors.fill: parent; color: Theme.palette.background }
+    Rectangle { anchors.fill: parent; color: root.qkBg }
 
     RowLayout {
         anchors.fill: parent
@@ -693,8 +705,8 @@ Item {
                     delegate: Rectangle {
                         width: qList.width
                         radius: Theme.spacing.radiusMedium
-                        color: modelData.moderated ? Theme.palette.backgroundElevated : Theme.palette.backgroundInset
-                        border.color: modelData.acceptedAnswerId ? Theme.palette.success : Theme.palette.borderHairline
+                        color: root.qkSurface
+                        border.color: modelData.acceptedAnswerId ? root.qkTeal : root.qkBorder
                         border.width: 1
                         implicitHeight: qcol.implicitHeight + 2 * Theme.spacing.medium
 
@@ -712,24 +724,37 @@ Item {
                                     Layout.alignment: Qt.AlignTop
                                     implicitWidth: 58; implicitHeight: 52
                                     radius: Theme.spacing.radiusSmall
-                                    color: upMa.containsMouse ? Theme.palette.surfaceRaised : Theme.palette.backgroundSecondary
-                                    border.color: Theme.palette.borderHairline; border.width: 1
+                                    color: upMa.containsMouse ? root.qkSurface2 : root.qkBg
+                                    border.color: root.qkBorder; border.width: 1
                                     ColumnLayout {
                                         anchors.centerIn: parent; spacing: 0
-                                        LogosText { Layout.alignment: Qt.AlignHCenter; text: "^"; color: Theme.palette.primary; font.pixelSize: 12 }
-                                        LogosText { Layout.alignment: Qt.AlignHCenter; text: "" + (modelData.upvotes || 0); color: Theme.palette.text; font.pixelSize: 15; font.weight: Theme.typography.weightMedium }
+                                        LogosText { Layout.alignment: Qt.AlignHCenter; text: "▲"; color: root.qkGold; font.pixelSize: 11 }
+                                        LogosText { Layout.alignment: Qt.AlignHCenter; text: "" + (modelData.upvotes || 0); color: root.qkText; font.pixelSize: 15; font.weight: Theme.typography.weightMedium }
                                     }
                                     MouseArea { id: upMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                         onClicked: root.act("upvoteQuestion", [modelData.id, "true"], "Could not upvote") }
                                 }
 
-                                LogosText {
+                                ColumnLayout {
                                     Layout.fillWidth: true
                                     Layout.alignment: Qt.AlignVCenter
-                                    text: (modelData.moderated ? "[hidden]  " : "") + (modelData.content || "")
-                                    color: modelData.moderated ? Theme.palette.textTertiary : Theme.palette.text
-                                    font.pixelSize: Theme.typography.primaryText
-                                    wrapMode: Text.WordWrap
+                                    spacing: Theme.spacing.tiny
+                                    LogosText {
+                                        Layout.fillWidth: true
+                                        text: (modelData.moderated ? "🚫  " : "") + (modelData.content || "")
+                                        color: modelData.moderated ? root.qkMuted : root.qkText
+                                        font.pixelSize: Theme.typography.primaryText
+                                        wrapMode: Text.WordWrap
+                                    }
+                                    RowLayout {
+                                        spacing: Theme.spacing.tiny
+                                        Rectangle {
+                                            implicitWidth: 18; implicitHeight: 18; radius: 9
+                                            color: Qt.hsla(root.hueFor(modelData.author) / 360, 0.45, 0.32, 1)
+                                            LogosText { anchors.centerIn: parent; text: (modelData.author && modelData.author.length > 2) ? modelData.author.charAt(2).toUpperCase() : "?"; color: root.qkText; font.pixelSize: 9; font.weight: Theme.typography.weightBold }
+                                        }
+                                        LogosText { text: root.shortAddr(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                                    }
                                 }
 
                                 LogosButton {
@@ -748,14 +773,14 @@ Item {
                                     Layout.leftMargin: 58 + Theme.spacing.medium
                                     spacing: Theme.spacing.small
                                     LogosText {
-                                        text: modelData.accepted ? "[x]" : "->"
-                                        color: modelData.accepted ? Theme.palette.success : Theme.palette.textTertiary
+                                        text: modelData.accepted ? "✓" : "↳"
+                                        color: modelData.accepted ? root.qkTeal : root.qkMuted
                                         font.pixelSize: Theme.typography.secondaryText
                                     }
                                     LogosText {
                                         Layout.fillWidth: true
                                         text: modelData.content || ""
-                                        color: Theme.palette.textSecondary
+                                        color: modelData.accepted ? root.qkTeal : "#d8d8e0"
                                         font.pixelSize: Theme.typography.secondaryText
                                         wrapMode: Text.WordWrap
                                     }
