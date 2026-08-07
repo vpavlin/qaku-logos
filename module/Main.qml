@@ -210,20 +210,31 @@ Item {
                 anchors.margins: Theme.spacing.medium
                 spacing: Theme.spacing.medium
 
-                // ---- app header ----
-                ColumnLayout {
+                // ---- app header (icon + wordmark) ----
+                RowLayout {
                     Layout.fillWidth: true
-                    spacing: Theme.spacing.tiny
-                    LogosText {
-                        text: "QAKU"
-                        color: Theme.palette.primary
-                        font.pixelSize: Theme.typography.panelTitleText
-                        font.weight: Theme.typography.weightBold
+                    spacing: Theme.spacing.small
+                    Image {
+                        source: "icon.png"          // bundled sibling of Main.qml in the .lgx
+                        sourceSize.width: 44; sourceSize.height: 44
+                        Layout.preferredWidth: 44; Layout.preferredHeight: 44
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
                     }
-                    LogosText {
-                        text: "Local-first Q&A on Logos"
-                        color: Theme.palette.textSecondary
-                        font.pixelSize: Theme.typography.secondaryText
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.spacing.tiny
+                        LogosText {
+                            text: "QAKU"
+                            color: root.qkGold
+                            font.pixelSize: Theme.typography.panelTitleText
+                            font.weight: Theme.typography.weightBold
+                        }
+                        LogosText {
+                            text: "Local-first Q&A on Logos"
+                            color: Theme.palette.textSecondary
+                            font.pixelSize: Theme.typography.secondaryText
+                        }
                     }
                 }
 
