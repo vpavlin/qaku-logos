@@ -106,9 +106,9 @@ function AppInner() {
       <SafeAreaView style={s.root}>
         <View style={s.topRow}>
           <Text style={s.brand}>QA<Text style={{ color: C.primary }}>KU</Text></Text>
-          <TouchableOpacity style={s.namePill} onPress={() => { setNameText(""); setNameModal(true); }}>
-            <Avatar addr={sessions.myAddress || "0x0"} size={22} />
-            <Text style={s.namePillT} numberOfLines={1}>{shortAddr(sessions.myAddress)}</Text>
+          <TouchableOpacity style={s.namePill} onPress={() => { setNameText(sessions.myName); setNameModal(true); }}>
+            <Avatar addr={sessions.myAddress || "0x0"} name={sessions.myName} size={22} />
+            <Text style={s.namePillT} numberOfLines={1}>{sessions.myName || shortAddr(sessions.myAddress)}</Text>
           </TouchableOpacity>
         </View>
         <Text style={s.section}>Your Q&As</Text>
@@ -154,7 +154,7 @@ function AppInner() {
         <Text style={s.roomHeadTitle} numberOfLines={1}>{title}</Text>
         <TouchableOpacity onPress={() => setShareHash(openHash)}><Text style={s.share}>Share</Text></TouchableOpacity>
       </View>
-      {myName ? null : <TouchableOpacity onPress={() => { setNameText(""); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
+      {(myName || sessions.myName) ? null : <TouchableOpacity onPress={() => { setNameText(sessions.myName); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
       <View style={s.askRow}>
         <TextInput style={s.input} placeholder="Ask a question…" placeholderTextColor={C.muted} value={q} onChangeText={setQ} />
         <TouchableOpacity style={s.btnPrimary} onPress={() => { const v = q.trim(); if (v) sessions.ask(openHash, v).catch(() => {}); setQ(""); }}><Text style={s.btnPrimaryT}>Ask</Text></TouchableOpacity>

@@ -16,6 +16,17 @@ import { Clock, ev } from "../../../packages/contract/src/index.mjs";
 // @ts-ignore
 import { signEvent } from "../../../packages/contract/src/identity.mjs";
 import * as SecureStore from "expo-secure-store";
+import * as FileSystem from "expo-file-system";
+
+// Durable local log store (the fix for "reload → empty Q&A": content must survive locally,
+// not depend on re-pulling from a peer that may not exist). One JSON file per room.
+const logPath = (h: string) => (FileSystem.documentDirectory || "") + "qaku-log-" + h + ".json";
+async function loadLogFile(h: string): Promise<any[]> {
+  try { const p = logPath(h); const info = await FileSystem.getInfoAsync(p); if (!info.exists) return []; const s = await FileSystem.readAsStringAsync(p); const a = JSON.parse(s); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+async function saveLogFile(h: string, log: any[]) {
+  try { await FileSystem.writeAsStringAsync(logPath(h), JSON.stringify(log)); } catch { /* best-effort */ }
+}
 
 const HEXC = "0123456789abcdef";
 const hex = (b: Uint8Array) => { let s = ""; for (const x of b) s += HEXC[x >> 4] + HEXC[x & 15]; return s; };
@@ -39,9 +50,18 @@ export class Sessions {
   private byHash = new Map<string, Room>();   // topicHash -> Room
   private identity: Identity | null = null;
   private deviceId = "";
+  private saveTimers = new Map<string, any>();
   started = false;
   myAddress = "";
+  myName = "";
   listeners = new Set<() => void>();
+
+  // Persist a room's log a short moment after it changes (batch bursts of ingests).
+  private scheduleSave(room: Room) {
+    const h = room.meta.topicHash;
+    clearTimeout(this.saveTimers.get(h));
+    this.saveTimers.set(h, setTimeout(() => saveLogFile(h, room.log), 400));
+  }
 
   subscribe(fn: () => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   private emit() { for (const fn of this.listeners) fn(); }
@@ -66,8 +86,10 @@ export class Sessions {
     this.identity = await getIdentity();
     this.myAddress = this.identity.address;
     this.deviceId = await getDeviceId();
+    try { this.myName = (await SecureStore.getItemAsync("qaku-myname")) || ""; } catch { /* */ }
     for (const meta of await this.loadRegistry()) {
       const room = this.makeRoom(meta);
+      await this.hydrate(room);   // restore the persisted log BEFORE we go live
       this.rooms.set(room.topic, room); this.byHash.set(room.meta.topicHash, room);
     }
     const topics = [...this.rooms.keys()];
@@ -99,11 +121,19 @@ export class Sessions {
     return false;
   }
 
+  // Restore a room's persisted log and advance its clock past every loaded event.
+  private async hydrate(room: Room) {
+    const log = await loadLogFile(room.meta.topicHash);
+    for (const e of log) { if (e && e.id) { room.ids.add(e.id); try { room.clock.receive(e.hlc); } catch { /* */ } } }
+    room.log = log;
+  }
+
   private ingest(room: Room, event: any) {
     if (!event || room.ids.has(event.id)) return;
     room.log = [...room.log, event];
     room.ids.add(event.id);
     try { room.clock.receive(event.hlc); } catch { /* */ }
+    this.scheduleSave(room);   // durable — survives reload without needing a peer
     this.emit();
   }
 
@@ -138,6 +168,7 @@ export class Sessions {
     if (this.started) await transport.join([room.topic]);
     // Author the session.create (owner = us) + our current name, then sync.
     await this.append(room, "sessionCreate", { sessionId: room.meta.topicHash, title: room.meta.title, description: "" });
+    if (this.myName) await this.append(room, "profileSet", { name: this.myName });
     this.emit();
     if (this.started) this.syncRoom(room);
     return room.meta.topicHash;
@@ -148,9 +179,11 @@ export class Sessions {
     if (!/^[0-9a-f]{64}$/.test(sh)) throw new Error("Secret must be 64 hex chars or a qaku://join link.");
     const room = this.makeRoom({ topicHash: "", secretHex: sh, title: "Q&A" });
     if (this.byHash.has(room.meta.topicHash)) return room.meta.topicHash; // already joined
+    await this.hydrate(room);   // restore any prior local log for this room
     this.rooms.set(room.topic, room); this.byHash.set(room.meta.topicHash, room);
     await this.saveRegistry();
     if (this.started) { await transport.join([room.topic]); this.syncRoom(room); }
+    if (this.myName) await this.append(room, "profileSet", { name: this.myName });
     this.emit();
     return room.meta.topicHash;
   }
@@ -161,8 +194,11 @@ export class Sessions {
     await this.saveRegistry(); this.emit();
   }
 
-  // Set our display name in EVERY joined room (bound to our address, signed).
+  // Set our display name: persist locally (so it shows on the home screen + survives
+  // reload independent of any room), then publish a signed profile.set to EVERY room.
   async setName(name: string) {
+    this.myName = name;
+    try { await SecureStore.setItemAsync("qaku-myname", name); } catch { /* */ }
     for (const room of this.rooms.values()) await this.append(room, "profileSet", { name });
     this.emit();
   }
