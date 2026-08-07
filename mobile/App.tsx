@@ -3,7 +3,7 @@
 // with optional display names; a small collapsible sync line keeps the diagnostics out
 // of the way. Palette = the original qaku (dark + gold primary + teal accent).
 import React, { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler } from "react-native";
+import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
 import { Sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
@@ -103,6 +103,13 @@ function AppInner() {
     const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
     return () => sub.remove();
   }, [scanning, nameModal, shareHash, openHash]);
+
+  // Re-sync whenever the app returns to the foreground — catches anything peers posted
+  // while we were backgrounded/offline (a single reconnect SYNC_REQ can miss it).
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (st) => { if (st === "active") sessions.resync().catch(() => {}); });
+    return () => sub.remove();
+  }, [sessions]);
 
   // Only fold ALL rooms on the home screen; inside a room we fold that one room once (below).
   // Gated on `loaded` (local state ready) — NOT `started` (connected) — so the list shows

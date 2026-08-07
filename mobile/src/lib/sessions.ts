@@ -109,7 +109,11 @@ export class Sessions {
       this.started = true;
       this.emit();
       await transport.join([...this.rooms.keys()]).catch(() => {}); // catch rooms added during bring-up
-      for (const room of this.rooms.values()) this.syncRoom(room);
+      // Catch-up rounds — retried to beat a still-forming mesh (a dropped first SYNC_REQ
+      // is how offline-posted questions got missed).
+      this.resync();
+      setTimeout(() => { this.lastResync = 0; this.resync(); }, 9000);
+      setTimeout(() => { this.lastResync = 0; this.resync(); }, 24000);
       // Periodically push our logs so a peer that subscribes LATER (e.g. Basecamp joining
       // by secret) catches up even though it never sends a SYNC_REQ. Rate-limited inside.
       if (this.seedTimer) clearInterval(this.seedTimer);
@@ -124,6 +128,20 @@ export class Sessions {
     this.sendSyncReq(room).catch(() => {});                 // pull: ask peers to re-serve
     setTimeout(() => this.seedRoom(room), 1500);            // push: re-broadcast ours (for already-subscribed peers)
     transport.storeSync((t, cands) => this.onCandidates(t, cands)).then(() => this.emit()).catch(() => {});
+  }
+
+  // Full catch-up round across every room: ask peers to re-serve (SYNC_REQ), push ours,
+  // and pull the fleet store once. Rate-limited. Retried a few times after connect and on
+  // app foreground — a single SYNC_REQ can race a still-forming mesh, which is how a
+  // question posted from Basecamp while the phone was offline got missed on reconnect.
+  private lastResync = 0;
+  async resync() {
+    if (!this.started) return;
+    const now = Date.now();
+    if (now - this.lastResync < 4000) return;               // coalesce rapid triggers
+    this.lastResync = now;
+    for (const room of this.rooms.values()) { this.sendSyncReq(room).catch(() => {}); this.seedRoom(room); }
+    try { await transport.storeSync((t, cands) => this.onCandidates(t, cands)); this.emit(); } catch { /* */ }
   }
 
   // Route an inbound payload to the room owning that topic; open with the room key; fold.
