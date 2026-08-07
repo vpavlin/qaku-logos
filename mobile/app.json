@@ -2,7 +2,7 @@
   "expo": {
     "name": "QAKU",
     "slug": "qaku",
-    "version": "0.1.38",
+    "version": "0.1.39",
     "platforms": [
       "android"
     ],
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "co.logos.qaku",
-      "versionCode": 37,
+      "versionCode": 38,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundImage": "./assets/adaptive-bg.png",
@@ -28,7 +28,9 @@
         {
           "cameraPermission": "QAKU scans the QR shown by another device to join and sync a Q&A."
         }
-      ]
+      ],
+      "expo-notifications",
+      "./plugins/withForegroundService.js"
     ],
     "extra": {
       "comment": "versionCode here is the source of truth; assert it matches the generated android/app/build.gradle after prebuild."

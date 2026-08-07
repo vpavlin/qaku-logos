@@ -58,6 +58,9 @@ export class Sessions {
   syncing = false;  // a catch-up round is active / events still flowing — show a spinner
   private syncSettle: any = null;
   private seenTs = new Map<string, number>();   // topicHash -> latest question ts the user has seen
+  private starred = new Set<string>();          // Q&As kept alive by the foreground service
+  private startTime = 0;
+  onNewQuestion: ((topicHash: string, content: string, title: string) => void) | null = null;
   myAddress = "";
   myName = "";
   listeners = new Set<() => void>();
@@ -104,6 +107,8 @@ export class Sessions {
     this.deviceId = await getDeviceId();
     try { this.myName = (await SecureStore.getItemAsync("qaku-myname")) || ""; } catch { /* */ }
     try { const raw = await SecureStore.getItemAsync("qaku-seen"); if (raw) for (const [k, v] of Object.entries(JSON.parse(raw))) this.seenTs.set(k, Number(v)); } catch { /* */ }
+    try { const raw = await SecureStore.getItemAsync("qaku-starred"); if (raw) this.starred = new Set(JSON.parse(raw)); } catch { /* */ }
+    this.startTime = Date.now();
     for (const meta of await this.loadRegistry()) {
       const room = this.makeRoom(meta);
       await this.hydrate(room);   // restore the persisted log
@@ -189,6 +194,24 @@ export class Sessions {
     try { room.clock.receive(event.hlc); } catch { /* */ }
     this.scheduleSave(room);   // durable — survives reload without needing a peer
     if (this.syncing) this.markSyncing(2500);   // events flowing — keep "syncing" until quiet
+    // Notify for a NEW question in a starred Q&A (someone else's, unseen, recent — so an
+    // old question arriving during catch-up doesn't spam).
+    if (event.type === "question.add" && event.dev !== this.myAddress && this.starred.has(room.meta.topicHash)) {
+      const ts = (event.hlc && event.hlc.wall) || 0;
+      if (ts > (this.seenTs.get(room.meta.topicHash) || 0) && ts > this.startTime - 300000) {
+        this.onNewQuestion?.(room.meta.topicHash, (event.payload && event.payload.content) || "New question", this.metaTitle(room.meta.topicHash));
+      }
+    }
+    this.emit();
+  }
+
+  // --- starred Q&As (kept alive by the foreground service) ---
+  isStarred(topicHash: string): boolean { return this.starred.has(topicHash); }
+  starredCount(): number { return this.starred.size; }
+  starredHashes(): string[] { return [...this.starred]; }
+  async toggleStar(topicHash: string) {
+    if (this.starred.has(topicHash)) this.starred.delete(topicHash); else this.starred.add(topicHash);
+    try { await SecureStore.setItemAsync("qaku-starred", JSON.stringify([...this.starred])); } catch { /* */ }
     this.emit();
   }
 
@@ -309,3 +332,7 @@ export class Sessions {
     });
   }
 }
+
+// Process-wide singleton — shared by the React tree AND the background-actions task, so
+// the node + logs persist across foreground/background as one instance.
+export const sessions = new Sessions();

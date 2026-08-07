@@ -6,9 +6,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState, RefreshControl } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
-import { Sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
+import { sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
 import { shortAddr } from "./src/lib/identity";
 import { counters, getRxSample, refreshPeerInfo, shardFor } from "./src/lib/logos-transport";
+import { initNotifications, notifyQuestion } from "./src/lib/notify";
+import { updateKeepAlive } from "./src/lib/keepalive";
 
 // OG qaku palette (src/index.css → hex).
 const C = {
@@ -63,7 +65,6 @@ function Avatar({ addr, name, size = 28 }: { addr: string; name?: string; size?:
 }
 
 function AppInner() {
-  const sessions = useMemo(() => new Sessions(), []);
   const [, tick] = useState(0);
   const force = () => tick((n) => n + 1);
   // Coalesce bursts of sync events into at most one re-render per 150ms (a store pull or
@@ -106,13 +107,27 @@ function AppInner() {
   };
   const openRoom = (h: string) => { sessions.markSeen(h); setOpenHash(h); };
   const leaveRoom = () => { if (openHash) sessions.markSeen(openHash); setOpenHash(null); };
+  // Star → keep this Q&A synced in the background (foreground service + notifications).
+  const toggleStar = async (h: string) => { await sessions.toggleStar(h); await updateKeepAlive(sessions.starredCount()); };
+
+  const openHashRef = React.useRef<string | null>(null);
+  useEffect(() => { openHashRef.current = openHash; }, [openHash]);
 
   useEffect(() => {
     const un = sessions.subscribe(scheduleForce);
-    sessions.start(setStatus).catch((e) => setError("Start failed: " + (e?.message || e)));
+    sessions.start(setStatus)
+      .then(() => updateKeepAlive(sessions.starredCount()))   // resume the FG service if any Q&A was starred
+      .catch((e) => setError("Start failed: " + (e?.message || e)));
     const t = setInterval(() => { refreshPeerInfo().catch(() => {}); force(); }, 3000);
-    return () => { un(); clearInterval(t); };
-  }, [sessions]);
+    // Notifications: open the tapped Q&A; alert on new questions in starred Q&As unless we're
+    // already looking at that one in the foreground.
+    initNotifications((h) => { sessions.markSeen(h); setOpenHash(h); });
+    sessions.onNewQuestion = (h, content, title) => {
+      if (openHashRef.current === h && AppState.currentState === "active") return;
+      notifyQuestion(h, title, content);
+    };
+    return () => { un(); clearInterval(t); sessions.onNewQuestion = null; };
+  }, []);
 
   // Android hardware back: close any open modal → leave the open Q&A back to the list →
   // only then let the OS handle it (exit). Without this, back killed the app from anywhere.
@@ -181,6 +196,7 @@ function AppInner() {
                 <Text style={[s.roomTitle, r.unread > 0 && { color: C.text }]} numberOfLines={1}>{r.title}</Text>
                 <Text style={s.roomSub}>{r.questions} question{r.questions === 1 ? "" : "s"}{r.owned ? "  ·  you host" : ""}</Text>
               </View>
+              {sessions.isStarred(r.topicHash) ? <Text style={s.starMini}>★</Text> : null}
               {r.owned ? <View style={s.hostBadge}><Text style={s.hostBadgeT}>HOST</Text></View> : null}
               {r.unread > 0 ? <View style={s.unreadBadge}><Text style={s.unreadBadgeT}>{r.unread > 99 ? "99+" : r.unread}</Text></View> : null}
               <Text style={s.chev}>›</Text>
@@ -261,8 +277,10 @@ function AppInner() {
       <View style={s.roomHead}>
         <TouchableOpacity onPress={leaveRoom}><Text style={s.back}>‹ Q&As</Text></TouchableOpacity>
         <Text style={s.roomHeadTitle} numberOfLines={1}>{title}</Text>
+        <TouchableOpacity onPress={() => toggleStar(openHash)} hitSlop={10}><Text style={[s.starBtn, sessions.isStarred(openHash) && s.starOn]}>{sessions.isStarred(openHash) ? "★" : "☆"}</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => setShareHash(openHash)}><Text style={s.share}>Share</Text></TouchableOpacity>
       </View>
+      {sessions.isStarred(openHash) ? <Text style={s.starHint}>★ Kept live in the background — you'll be notified of new questions</Text> : null}
       {sessions.syncing ? <Text style={s.syncingHint}>⟳  Syncing this Q&A… questions may still be arriving</Text> : null}
       {(sessions.myName || names[sessions.myAddress]) ? null : <TouchableOpacity onPress={() => { setNameText(sessions.myName); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
       <View style={s.askRow}>
@@ -400,6 +418,10 @@ const s = StyleSheet.create({
   back: { color: C.primary, fontSize: 15, fontWeight: "700" },
   roomHeadTitle: { color: C.text, fontSize: 17, fontWeight: "800", flex: 1, textAlign: "center", marginHorizontal: 8 },
   share: { color: C.accent, fontSize: 14, fontWeight: "700" },
+  starBtn: { color: C.muted, fontSize: 20, marginHorizontal: 10 },
+  starOn: { color: C.primary },
+  starMini: { color: C.primary, fontSize: 13 },
+  starHint: { color: C.primary, fontSize: 12, marginBottom: 8, opacity: 0.9 },
   setNameHint: { color: C.primary, fontSize: 12, marginBottom: 8 },
   askRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
   qCard: { flexDirection: "row", gap: 10, backgroundColor: C.surface, borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: C.border },

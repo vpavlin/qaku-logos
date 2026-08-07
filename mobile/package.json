@@ -16,9 +16,11 @@
     "expo": "~51.0.0",
     "expo-camera": "~15.0.16",
     "expo-crypto": "~13.0.2",
+    "expo-notifications": "~0.28.19",
     "expo-secure-store": "~13.0.0",
     "react": "18.2.0",
     "react-native": "0.74.0",
+    "react-native-background-actions": "^4.0.1",
     "react-native-qrcode-svg": "^6.3.21",
     "react-native-svg": "15.2.0"
   },
