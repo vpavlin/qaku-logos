@@ -273,10 +273,21 @@ export class Sessions {
     const event = (ev as any)[type](room.clock.send(), payload);
     signEvent(this.identity, event);
     this.ingest(room, event);
-    // Mark "queued" (durable) BEFORE the send — so if the send is dropped (node not up,
-    // empty mesh), retryUnpublished keeps re-sending until the store echoes it back.
+    // Mark "queued" (durable) BEFORE the send, then attempt it. trySend clears it once the
+    // send lands in a live mesh; a mesh-gap send stays queued and retryUnpublished resends.
     this.unconfirmed.add(event.id); this.saveUnconfirmed();
-    await this.publish(room, { v: 1, type: "EVENT", event }).catch(() => {});
+    await this.trySend(room, event);
+  }
+
+  // Publish one event and, on success into a NON-EMPTY mesh, mark it published. mesh===0
+  // means it was buffered with no peer to relay to → keep it queued (retry later). mesh<0
+  // (not yet measured) is the healthy startup default → treat as sent. The store-echo path
+  // in onCandidates is an extra backstop that confirms even if this heuristic was wrong.
+  private async trySend(room: Room, event: any) {
+    try {
+      await this.publish(room, { v: 1, type: "EVENT", event });
+      if (transport.counters.mesh !== 0 && this.unconfirmed.delete(event.id)) { this.saveUnconfirmed(); this.emit(); }
+    } catch { /* stays queued — retryUnpublished will resend when the mesh is up */ }
   }
 
   private async saveUnconfirmed() {
@@ -288,9 +299,9 @@ export class Sessions {
     if (!this.started || this.unconfirmed.size === 0) return;
     for (const room of this.rooms.values())
       for (const e of room.log)
-        if (this.unconfirmed.has(e.id)) this.publish(room, { v: 1, type: "EVENT", event: e }).catch(() => {});
+        if (this.unconfirmed.has(e.id)) this.trySend(room, e);
   }
-  // Our own event came back from the network (a store pull) → it's really published.
+  // Published = sent into a live mesh (or echoed back from the store). Not just "in our log".
   isPublished(evId: string): boolean { return !this.unconfirmed.has(evId); }
   pendingCount(): number { return this.unconfirmed.size; }
   unpublishedIn(topicHash: string): number {

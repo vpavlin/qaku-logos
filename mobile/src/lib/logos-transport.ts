@@ -188,7 +188,7 @@ export async function start(opts: { deviceId: string; topics: string[]; onReceiv
 // KYM publishSealed (channel branch) — DOUBLE-base64 over the SDS reliable channel.
 export async function publishSealed(topic: string, sealed: Uint8Array): Promise<void> {
   counters.txAttempt++;
-  if (!node) { diag.txErr = "node-null"; return; }
+  if (!node) { diag.txErr = "node-null"; throw new Error("node-null"); }   // THROW so the caller keeps it queued
   const sealedB64 = fromByteArray(sealed);
   const doubled = fromByteArray(utf8(sealedB64));
   try {
