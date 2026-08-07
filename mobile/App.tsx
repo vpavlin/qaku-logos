@@ -222,7 +222,7 @@ function renderNameModal(open: boolean, setOpen: (v: boolean) => void, text: str
       <View style={s.modalWrap}><View style={s.modalCard}>
         <Text style={s.modalTitle}>Your display name</Text>
         <Text style={s.modalHint}>Shown next to your questions & answers, signed by your key. Others can verify it's really you.</Text>
-        <TextInput style={s.input} placeholder="e.g. satoshi" placeholderTextColor={C.muted} value={text} onChangeText={setText} autoFocus />
+        <TextInput style={s.modalInput} placeholder="e.g. satoshi" placeholderTextColor={C.muted} value={text} onChangeText={setText} autoFocus autoCapitalize="none" returnKeyType="done" onSubmitEditing={save} />
         <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
           <TouchableOpacity style={[s.btnGhost, { flex: 1 }]} onPress={() => setOpen(false)}><Text style={s.btnGhostT}>Cancel</Text></TouchableOpacity>
           <TouchableOpacity style={[s.btnPrimary, { flex: 1 }]} onPress={save}><Text style={s.btnPrimaryT}>Save</Text></TouchableOpacity>
@@ -276,7 +276,10 @@ const s = StyleSheet.create({
   chev: { color: C.muted, fontSize: 22 },
   createRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   joinRow: { flexDirection: "row", gap: 8, marginTop: 8 },
-  input: { flex: 1, backgroundColor: C.input, color: C.text, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
+  input: { flex: 1, backgroundColor: C.input, color: C.text, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, minHeight: 44 },
+  // Modal inputs live in a COLUMN card — no flex:1 (which would collapse their height);
+  // full width via alignSelf stretch + an explicit height so they're tappable.
+  modalInput: { alignSelf: "stretch", backgroundColor: C.input, color: C.text, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, minHeight: 48 },
   inputSm: { flex: 1, backgroundColor: C.input, color: C.text, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, fontSize: 13 },
   btnPrimary: { backgroundColor: C.primary, borderRadius: 10, paddingHorizontal: 16, justifyContent: "center", alignItems: "center" },
   btnPrimaryT: { color: C.primaryFg, fontWeight: "800" },
