@@ -64,6 +64,9 @@ function AppInner() {
   const [q, setQ] = useState("");
   const [answering, setAnswering] = useState<string | null>(null);
   const [answerText, setAnswerText] = useState("");
+  const [sortBy, setSortBy] = useState<"top" | "new" | "old" | "answered">("top");
+  const [filterBy, setFilterBy] = useState<"all" | "unanswered" | "answered">("all");
+  const [hiddenOpen, setHiddenOpen] = useState(false);
   // modals
   const [scanning, setScanning] = useState(false);
   const [shareHash, setShareHash] = useState<string | null>(null);
@@ -158,9 +161,53 @@ function AppInner() {
 
   // ---------- ROOM ----------
   const st = sessions.state(openHash);
-  const questions = st.questions || [];
+  const allQ = st.questions || [];
   const admin = sessions.isAdmin(openHash);
+  const answeredOf = (x: any) => (x.answers && x.answers.length > 0) || !!x.acceptedAnswerId;
+  const visibleQ = allQ.filter((x: any) => !x.moderated);
+  const filteredQ = filterBy === "unanswered" ? visibleQ.filter((x: any) => !answeredOf(x))
+    : filterBy === "answered" ? visibleQ.filter(answeredOf) : visibleQ;
+  const sortFns: any = {
+    top: (a: any, b: any) => (b.upvotes || 0) - (a.upvotes || 0) || a.ts - b.ts,
+    new: (a: any, b: any) => b.ts - a.ts,
+    old: (a: any, b: any) => a.ts - b.ts,
+    answered: (a: any, b: any) => (answeredOf(b) ? 1 : 0) - (answeredOf(a) ? 1 : 0) || (b.upvotes || 0) - (a.upvotes || 0),
+  };
+  const shownQ = [...filteredQ].sort(sortFns[sortBy]);
+  const hiddenQ = allQ.filter((x: any) => x.moderated);
   const title = (st.session && st.session.title) || rooms.find((r) => r.topicHash === openHash)?.title || "Q&A";
+  const renderQ = (qq: any) => (
+    <View key={qq.id} style={[s.qCard, qq.acceptedAnswerId && { borderColor: C.accent }, qq.moderated && { opacity: 0.55 }]}>
+      <TouchableOpacity style={s.upvote} onPress={() => sessions.upvote(openHash!, qq.id).catch(() => {})}>
+        <Text style={s.upvoteArrow}>▲</Text><Text style={s.upvoteN}>{qq.upvotes || 0}</Text>
+      </TouchableOpacity>
+      <View style={{ flex: 1 }}>
+        <Text style={s.qText}>{qq.content}</Text>
+        <View style={s.byline}>
+          <Avatar addr={qq.author} name={sessions.displayName(openHash!, qq.author)} size={18} />
+          <Text style={s.bylineName} numberOfLines={1}>{sessions.displayName(openHash!, qq.author)}</Text>
+          {qq.verified ? <Text style={s.verified}>✓</Text> : null}
+        </View>
+        {(qq.answers || []).map((a: any) => (
+          <View key={a.id} style={s.answer}>
+            <Text style={[s.answerText, a.accepted && { color: C.accent }]}>{a.accepted ? "✓ " : "↳ "}{a.content}</Text>
+            <View style={s.byline}><Text style={s.bylineName}>{sessions.displayName(openHash!, a.author)}</Text>{a.verified ? <Text style={s.verified}>✓</Text> : null}</View>
+          </View>
+        ))}
+        {admin && (answering === qq.id ? (
+          <View style={s.answerRow}>
+            <TextInput style={s.inputSm} placeholder="Answer…" placeholderTextColor={C.muted} value={answerText} onChangeText={setAnswerText} autoFocus />
+            <TouchableOpacity style={s.btnPrimarySm} onPress={() => { const v = answerText.trim(); if (v) sessions.postAnswer(openHash!, qq.id, v).catch(() => {}); setAnswerText(""); setAnswering(null); }}><Text style={s.btnPrimaryT}>Send</Text></TouchableOpacity>
+          </View>
+        ) : (
+          <View style={s.adminRow}>
+            <TouchableOpacity onPress={() => { setAnswering(qq.id); setAnswerText(""); }}><Text style={s.adminAction}>Answer</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => sessions.moderate(openHash!, qq.id, !qq.moderated).catch(() => {})}><Text style={s.adminAction}>{qq.moderated ? "Unhide" : "Hide"}</Text></TouchableOpacity>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
   return (
     <SafeAreaView style={s.root}>
       <View style={s.roomHead}>
@@ -173,40 +220,31 @@ function AppInner() {
         <TextInput style={s.input} placeholder="Ask a question…" placeholderTextColor={C.muted} value={q} onChangeText={setQ} />
         <TouchableOpacity style={s.btnPrimary} onPress={() => { const v = q.trim(); if (v) sessions.ask(openHash, v).catch(() => {}); setQ(""); }}><Text style={s.btnPrimaryT}>Ask</Text></TouchableOpacity>
       </View>
+      <View style={s.controls}>
+        <View style={s.chipRow}>
+          <Text style={s.chipLabel}>Sort</Text>
+          {(["top", "new", "old"] as const).map((k) => (
+            <TouchableOpacity key={k} style={[s.chip, sortBy === k && s.chipOn]} onPress={() => setSortBy(k)}><Text style={[s.chipT, sortBy === k && s.chipTOn]}>{k === "top" ? "Top" : k === "new" ? "New" : "Old"}</Text></TouchableOpacity>
+          ))}
+        </View>
+        <View style={s.chipRow}>
+          <Text style={s.chipLabel}>Show</Text>
+          {(["all", "unanswered", "answered"] as const).map((k) => (
+            <TouchableOpacity key={k} style={[s.chip, filterBy === k && s.chipOn]} onPress={() => setFilterBy(k)}><Text style={[s.chipT, filterBy === k && s.chipTOn]}>{k === "all" ? "All" : k === "unanswered" ? "Unanswered" : "Answered"}</Text></TouchableOpacity>
+          ))}
+        </View>
+      </View>
       <ScrollView style={{ flex: 1 }}>
-        {questions.length === 0 ? <Text style={s.empty}>No questions yet — be the first to ask.</Text> : null}
-        {questions.map((qq: any) => (
-          <View key={qq.id} style={[s.qCard, qq.acceptedAnswerId && { borderColor: C.accent }]}>
-            <TouchableOpacity style={s.upvote} onPress={() => sessions.upvote(openHash!, qq.id).catch(() => {})}>
-              <Text style={s.upvoteArrow}>▲</Text><Text style={s.upvoteN}>{qq.upvotes || 0}</Text>
+        {shownQ.length === 0 ? <Text style={s.empty}>{allQ.length === 0 ? "No questions yet — be the first to ask." : "Nothing matches this filter."}</Text> : null}
+        {shownQ.map(renderQ)}
+        {hiddenQ.length > 0 ? (
+          <View style={s.hiddenSection}>
+            <TouchableOpacity style={s.hiddenHead} onPress={() => setHiddenOpen((v) => !v)}>
+              <Text style={s.hiddenHeadT}>{hiddenOpen ? "▾" : "▸"}  Hidden ({hiddenQ.length})</Text>
             </TouchableOpacity>
-            <View style={{ flex: 1 }}>
-              <Text style={s.qText}>{qq.moderated ? "🚫 " : ""}{qq.content}</Text>
-              <View style={s.byline}>
-                <Avatar addr={qq.author} name={sessions.displayName(openHash!, qq.author)} size={18} />
-                <Text style={s.bylineName} numberOfLines={1}>{sessions.displayName(openHash!, qq.author)}</Text>
-                {qq.verified ? <Text style={s.verified}>✓</Text> : null}
-              </View>
-              {(qq.answers || []).map((a: any) => (
-                <View key={a.id} style={s.answer}>
-                  <Text style={[s.answerText, a.accepted && { color: C.accent }]}>{a.accepted ? "✓ " : "↳ "}{a.content}</Text>
-                  <View style={s.byline}><Text style={s.bylineName}>{sessions.displayName(openHash!, a.author)}</Text>{a.verified ? <Text style={s.verified}>✓</Text> : null}</View>
-                </View>
-              ))}
-              {admin && (answering === qq.id ? (
-                <View style={s.answerRow}>
-                  <TextInput style={s.inputSm} placeholder="Answer…" placeholderTextColor={C.muted} value={answerText} onChangeText={setAnswerText} autoFocus />
-                  <TouchableOpacity style={s.btnPrimarySm} onPress={() => { const v = answerText.trim(); if (v) sessions.postAnswer(openHash!, qq.id, v).catch(() => {}); setAnswerText(""); setAnswering(null); }}><Text style={s.btnPrimaryT}>Send</Text></TouchableOpacity>
-                </View>
-              ) : (
-                <View style={s.adminRow}>
-                  <TouchableOpacity onPress={() => { setAnswering(qq.id); setAnswerText(""); }}><Text style={s.adminAction}>Answer</Text></TouchableOpacity>
-                  <TouchableOpacity onPress={() => sessions.moderate(openHash!, qq.id, !qq.moderated).catch(() => {})}><Text style={s.adminAction}>{qq.moderated ? "Unhide" : "Hide"}</Text></TouchableOpacity>
-                </View>
-              ))}
-            </View>
+            {hiddenOpen ? hiddenQ.map(renderQ) : null}
           </View>
-        ))}
+        ) : null}
       </ScrollView>
       <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic={openHash} />
       {renderShare(shareHash, sessions, setShareHash)}
@@ -322,6 +360,18 @@ const s = StyleSheet.create({
   answerRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   adminRow: { flexDirection: "row", gap: 16, marginTop: 8 },
   adminAction: { color: C.accent, fontSize: 13, fontWeight: "700" },
+  // sort/filter controls
+  controls: { gap: 6, marginBottom: 10 },
+  chipRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  chipLabel: { color: C.muted, fontSize: 11, width: 34 },
+  chip: { backgroundColor: C.surface, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 5, borderWidth: 1, borderColor: C.border },
+  chipOn: { backgroundColor: C.primary, borderColor: C.primary },
+  chipT: { color: C.muted, fontSize: 12, fontWeight: "600" },
+  chipTOn: { color: C.primaryFg, fontWeight: "800" },
+  // hidden section
+  hiddenSection: { marginTop: 8, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 8 },
+  hiddenHead: { paddingVertical: 8 },
+  hiddenHeadT: { color: C.muted, fontSize: 13, fontWeight: "700" },
   // sync line
   syncLine: { borderTopWidth: 1, borderTopColor: C.border, paddingTop: 8, marginTop: 4 },
   dot: { width: 8, height: 8, borderRadius: 4 },
