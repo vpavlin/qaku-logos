@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@noble/ciphers": "^1.0.0",
+    "@noble/curves": "^1.8.1",
     "@noble/hashes": "^1.4.0",
     "base64-js": "^1.5.1",
     "expo": "~51.0.0",

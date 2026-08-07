@@ -5,6 +5,21 @@
 
 import { EventType, Role, UpvoteTarget } from "../../contract/src/events.mjs";
 import { compareHlc } from "../../contract/src/hlc.mjs";
+import { verifyEvent } from "../../contract/src/identity.mjs";
+
+// Signature admission. Authored events carry a secp256k1 signature (identity.mjs); the
+// author (hlc.dev) is the signer's address, so admin/creator gating becomes spoof-proof.
+// TRANSITION: default is PERMISSIVE — a SIGNED event must verify (bad sig ⇒ dropped),
+// but an UNSIGNED (legacy / not-yet-updated peer) event is still admitted, so mobile and
+// desktop keep syncing while both sides roll out signing. Flip to STRICT (drop unsigned)
+// via setSignatureMode({strict:true}) once every writer signs. Must match qaku_engine.hpp.
+let STRICT_SIG = false;
+export function setSignatureMode({ strict } = {}) { STRICT_SIG = !!strict; }
+export function getSignatureMode() { return { strict: STRICT_SIG }; }
+function sigOk(e) {
+  if (e && e.sig) return verifyEvent(e);   // signed → must be cryptographically valid
+  return !STRICT_SIG;                        // unsigned → legacy-admit unless strict
+}
 
 /**
  * Merge any number of event logs into one deduped, HLC-ordered array.
@@ -40,7 +55,9 @@ const PARTICIPANT_EVENTS = new Set([
  * Returns { admitted (HLC-ordered), owner, admins:[], isSession }.
  */
 export function admitEvents(events) {
-  const ordered = mergeEvents(events);
+  // Signature gate first: drop forged/invalid-signed events (and, in strict mode,
+  // unsigned ones) before any role fold, so a bad signer can't influence admission.
+  const ordered = mergeEvents(events.filter(sigOk));
 
   // Owner = author of the earliest session.create.
   let owner = null;
