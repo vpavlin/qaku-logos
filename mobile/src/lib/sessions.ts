@@ -173,6 +173,8 @@ export class Sessions {
   private onCandidates(topic: string, candidates: Uint8Array[]): boolean {
     const room = this.rooms.get(topic);
     if (!room) return false;
+    // `candidates` are decode-alternatives of ONE message (single/double-b64/raw); the first
+    // that open()s is the real one — process it and stop (the rest are garbage decodings).
     for (const cand of candidates) {
       let plain: Uint8Array;
       try { plain = open(room.sealId, cand, room.topic); } catch { continue; }

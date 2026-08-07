@@ -152,11 +152,13 @@ export async function start(opts: { deviceId: string; topics: string[]; onReceiv
     step("Starting node…");
     if (!didSetup) { await LogosMessaging.setup(); didSetup = true; }
     // KYM's RELAY config — no light-client fields (they make waku_new reject → offline).
-    // tcpPort:0 → OS-assigned free port; discv5Discovery:false → no fixed discv5 UDP
-    // port. Both let a SECOND liblogosdelivery node (the other app) run on the same
-    // device without a port collision. entryNodes are pinned so discovery isn't needed;
-    // proven to still mesh (desktop 2-node test: 36/36 with discv5 off).
-    const config = { mode: "Core", preset: FLEET_PRESET, relay: true, entryNodes: ENTRY_NODES, tcpPort: 0, discv5Discovery: false };
+    // tcpPort:0 → OS-assigned free port. discv5Discovery:true → the node discovers shard
+    // peers via discv5 instead of relying only on the handful of entry nodes; on a phone
+    // behind carrier-NAT that discovery is what actually lets it graft into the shard mesh
+    // ("shard -, mesh 0" is the no-discovery failure mode). Trade-off: two liblogosdelivery
+    // nodes on ONE device now share the default discv5 UDP port (9000) — running both apps
+    // at once may collide, which is far rarer than a single app failing to mesh.
+    const config = { mode: "Core", preset: FLEET_PRESET, relay: true, entryNodes: ENTRY_NODES, tcpPort: 0, discv5Discovery: true };
     const c: string = await LogosMessaging.new(config);
     step("Joining mesh…");
     await LogosMessaging.start(c);
