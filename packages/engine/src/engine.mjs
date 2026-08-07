@@ -38,9 +38,10 @@ const MOD_EVENTS = new Set([
   EventType.ANSWER_DELETE, EventType.ANSWER_ACCEPT, EventType.MODERATE,
   EventType.POLL_CREATE, EventType.POLL_SET_ACTIVE, EventType.POLL_DELETE,
 ]);
-// Anyone with the session secret may author these (a participant).
+// Anyone with the session secret may author these (a participant). profile.set only
+// names the author's OWN address, so it's self-scoped and safe for anyone to author.
 const PARTICIPANT_EVENTS = new Set([
-  EventType.QUESTION_ADD, EventType.UPVOTE, EventType.POLL_VOTE,
+  EventType.QUESTION_ADD, EventType.UPVOTE, EventType.POLL_VOTE, EventType.PROFILE_SET,
 ]);
 
 /**
@@ -138,6 +139,7 @@ export function computeState(events) {
   const questions = new Map(); // qid -> {..., deleted}
   const answers = new Map();   // aid -> {..., deleted}
   const polls = new Map();     // pid -> {..., deleted, votes: Map<voter,optionId>}
+  const names = new Map();     // address -> latest display name (LWW-by-HLC, ordered fold)
 
   for (const e of ordered) {
     const p = e.payload;
@@ -159,7 +161,7 @@ export function computeState(events) {
       case EventType.QUESTION_ADD: {
         const cur = questions.get(p.questionId);
         if (cur) cur.view = { ...cur.view, ...p };
-        else questions.set(p.questionId, { view: { id: p.questionId, content: p.content, author: p.author || e.hlc.dev, ts: e.hlc.wall, moderated: false, acceptedAnswerId: null }, deleted: false });
+        else questions.set(p.questionId, { view: { id: p.questionId, content: p.content, author: p.author || e.hlc.dev, verified: !!e.sig, ts: e.hlc.wall, moderated: false, acceptedAnswerId: null }, deleted: false });
         break;
       }
       case EventType.QUESTION_EDIT: {
@@ -181,7 +183,7 @@ export function computeState(events) {
       case EventType.ANSWER_POST: {
         const cur = answers.get(p.answerId);
         if (cur) cur.view = { ...cur.view, ...p };
-        else answers.set(p.answerId, { view: { id: p.answerId, questionId: p.questionId, content: p.content, author: p.author || e.hlc.dev, ts: e.hlc.wall, accepted: false }, deleted: false });
+        else answers.set(p.answerId, { view: { id: p.answerId, questionId: p.questionId, content: p.content, author: p.author || e.hlc.dev, verified: !!e.sig, ts: e.hlc.wall, accepted: false }, deleted: false });
         break;
       }
       case EventType.ANSWER_EDIT: {
@@ -222,6 +224,9 @@ export function computeState(events) {
         if (cur) cur.votes.set(p.voter, p.optionId);  // per-voter LWW register (HLC order)
         break;
       }
+      case EventType.PROFILE_SET:
+        if (typeof p.name === "string") names.set(e.hlc.dev, p.name.slice(0, 40)); // LWW per author
+        break;
       default: break;
     }
   }
@@ -257,6 +262,7 @@ export function computeState(events) {
     owner: admission.owner,
     admins: admission.admins,
     isSession: admission.isSession,
+    names: Object.fromEntries(names),
     questions: liveQuestions,
     polls: livePolls,
     questionCount: liveQuestions.length,

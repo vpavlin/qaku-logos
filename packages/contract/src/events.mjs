@@ -13,6 +13,9 @@ export const EventType = {
   ADMIN_ADD: "admin.add",             // owner/admin grants admin
   ADMIN_REMOVE: "admin.remove",       // owner/admin revokes admin (soft; owner is permanent)
 
+  // --- profile: a participant's self-chosen display name, bound to their address ---
+  PROFILE_SET: "profile.set",         // { name } — LWW-by-HLC per author; anyone sets their OWN
+
   // --- questions (any participant may add; edit/delete = author or admin) ---
   QUESTION_ADD: "question.add",
   QUESTION_EDIT: "question.edit",     // superseding, field-scoped LWW-by-HLC
@@ -66,6 +69,10 @@ export const ev = {
     makeEvent(EventType.ADMIN_ADD, hlc, { memberId, name }, id),
   adminRemove: (hlc, { memberId }, id) =>
     makeEvent(EventType.ADMIN_REMOVE, hlc, { memberId }, id),
+
+  // A display name for the author (hlc.dev = their address). LWW-by-HLC per author.
+  profileSet: (hlc, { name }, id) =>
+    makeEvent(EventType.PROFILE_SET, hlc, { name }, id),
 
   questionAdd: (hlc, { questionId, content, author }, id) =>
     makeEvent(EventType.QUESTION_ADD, hlc, { questionId, content, author }, id),
