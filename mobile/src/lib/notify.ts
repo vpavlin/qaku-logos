@@ -5,6 +5,7 @@ import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
 let inited = false;
+export let lastNotifyError = "";
 
 // Call once at startup. onTap(topicHash) opens that Q&A when a notification is tapped.
 export async function initNotifications(onTap: (topicHash: string) => void) {
@@ -29,10 +30,9 @@ export async function initNotifications(onTap: (topicHash: string) => void) {
 }
 
 export async function notifyQuestion(topicHash: string, title: string, body: string) {
-  try {
-    await Notifications.scheduleNotificationAsync({
-      content: { title: title || "New question", body: body || "", data: { topicHash } },
-      trigger: Platform.OS === "android" ? ({ channelId: "qaku" } as any) : null,
-    });
-  } catch { /* */ }
+  // trigger:null = fire immediately (default channel). Most compatible way to actually show.
+  await Notifications.scheduleNotificationAsync({
+    content: { title: title || "New question", body: body || "", data: { topicHash }, sound: "default" },
+    trigger: null,
+  }).catch((e) => { lastNotifyError = String(e?.message || e); });
 }

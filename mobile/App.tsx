@@ -3,7 +3,7 @@
 // with optional display names; a small collapsible sync line keeps the diagnostics out
 // of the way. Palette = the original qaku (dark + gold primary + teal accent).
 import React, { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState, RefreshControl } from "react-native";
+import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState, RefreshControl, Image } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
 import { sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
@@ -178,7 +178,10 @@ function AppInner() {
     return (
       <SafeAreaView style={s.root}>
         <View style={s.topRow}>
-          <Text style={s.brand}>QA<Text style={{ color: C.primary }}>KU</Text></Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 9 }}>
+            <Image source={require("./assets/icon.png")} style={s.logo} />
+            <Text style={s.brand}>QA<Text style={{ color: C.primary }}>KU</Text></Text>
+          </View>
           <TouchableOpacity style={s.namePill} onPress={() => { setNameText(sessions.myName); setNameModal(true); }}>
             <Avatar addr={sessions.myAddress || "0x0"} name={sessions.myName} size={22} />
             <Text style={s.namePillT} numberOfLines={1}>{sessions.myName || shortAddr(sessions.myAddress)}</Text>
@@ -280,7 +283,7 @@ function AppInner() {
         <TouchableOpacity onPress={() => toggleStar(openHash)} hitSlop={10}><Text style={[s.starBtn, sessions.isStarred(openHash) && s.starOn]}>{sessions.isStarred(openHash) ? "★" : "☆"}</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => setShareHash(openHash)}><Text style={s.share}>Share</Text></TouchableOpacity>
       </View>
-      {sessions.isStarred(openHash) ? <Text style={s.starHint}>★ Kept live in the background — you'll be notified of new questions</Text> : null}
+      {sessions.isStarred(openHash) ? <TouchableOpacity onPress={() => notifyQuestion(openHash!, "Test notification", "If you can see this, notifications work ✓")}><Text style={s.starHint}>★ Kept live in the background · tap to send a test notification</Text></TouchableOpacity> : null}
       {sessions.syncing ? <Text style={s.syncingHint}>⟳  Syncing this Q&A… questions may still be arriving</Text> : null}
       {(sessions.myName || names[sessions.myAddress]) ? null : <TouchableOpacity onPress={() => { setNameText(sessions.myName); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
       <View style={s.askRow}>
@@ -330,7 +333,7 @@ function SyncLine({ status, show, onToggle, topic }: { status: string; show: boo
         <Text style={s.syncTxt}>{counters.peers > 0 ? `${counters.peers} peers` : status}{meshBad ? " · forming…" : ""}</Text>
         <Text style={s.syncMore}>{show ? "▾" : "▸"}</Text>
       </View>
-      {show ? <Text selectable style={s.diag}>shard {topic ? shardFor("/qaku/1/" + topic + "/proto") : "-"} · mesh {counters.mesh} · rx {counters.rxNew}/{counters.rxOpened} · tx {counters.txTotal}/{counters.txAttempt} fail {counters.txFail}{"\n"}{getRxSample()}</Text> : null}
+      {show ? <Text selectable style={s.diag}>shard {topic ? shardFor("/qaku/1/" + topic + "/proto") : "-"} · mesh {counters.mesh} · rx {counters.rxNew}/{counters.rxOpened} · tx {counters.txTotal}/{counters.txAttempt} fail {counters.txFail} · notif {sessions.notifyAttempts}{"\n"}{getRxSample()}</Text> : null}
     </TouchableOpacity>
   );
 }
@@ -383,6 +386,7 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg, padding: 16 },
   topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
   brand: { color: C.text, fontSize: 28, fontWeight: "800", letterSpacing: 1 },
+  logo: { width: 32, height: 32, borderRadius: 7 },
   namePill: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: C.surface, borderRadius: 20, paddingVertical: 4, paddingHorizontal: 8, maxWidth: 160 },
   namePillT: { color: C.muted, fontSize: 12 },
   section: { color: C.muted, fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 },

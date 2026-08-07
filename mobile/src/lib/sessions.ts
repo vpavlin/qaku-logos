@@ -60,7 +60,9 @@ export class Sessions {
   private seenTs = new Map<string, number>();   // topicHash -> latest question ts the user has seen
   private starred = new Set<string>();          // Q&As kept alive by the foreground service
   private startTime = 0;
+  private connectedAt = 0;
   onNewQuestion: ((topicHash: string, content: string, title: string) => void) | null = null;
+  notifyAttempts = 0;   // diagnostic: how many times we've asked to fire a question notification
   myAddress = "";
   myName = "";
   listeners = new Set<() => void>();
@@ -124,6 +126,7 @@ export class Sessions {
     try {
       await transport.start({ deviceId: this.deviceId, topics: [...this.rooms.keys()], onStatus, onReceive: (t, c) => this.onCandidates(t, c) });
       this.started = true;
+      this.connectedAt = Date.now();
       this.emit();
       this.markSyncing(8000);   // initial catch-up window
       await transport.join([...this.rooms.keys()]).catch(() => {}); // catch rooms added during bring-up
@@ -194,13 +197,13 @@ export class Sessions {
     try { room.clock.receive(event.hlc); } catch { /* */ }
     this.scheduleSave(room);   // durable — survives reload without needing a peer
     if (this.syncing) this.markSyncing(2500);   // events flowing — keep "syncing" until quiet
-    // Notify for a NEW question in a starred Q&A (someone else's, unseen, recent — so an
-    // old question arriving during catch-up doesn't spam).
-    if (event.type === "question.add" && event.dev !== this.myAddress && this.starred.has(room.meta.topicHash)) {
-      const ts = (event.hlc && event.hlc.wall) || 0;
-      if (ts > (this.seenTs.get(room.meta.topicHash) || 0) && ts > this.startTime - 300000) {
-        this.onNewQuestion?.(room.meta.topicHash, (event.payload && event.payload.content) || "New question", this.metaTitle(room.meta.topicHash));
-      }
+    // Notify for a question in a starred Q&A that arrives AFTER the initial catch-up flood
+    // (past ~12s from connect) — skew-proof: uses wall time since connect, not the event's
+    // ts (which comes from another device's clock). Suppresses the reconnect backlog.
+    if (event.type === "question.add" && event.dev !== this.myAddress && this.starred.has(room.meta.topicHash)
+        && this.connectedAt > 0 && Date.now() - this.connectedAt > 12000) {
+      this.notifyAttempts++;
+      this.onNewQuestion?.(room.meta.topicHash, (event.payload && event.payload.content) || "New question", this.metaTitle(room.meta.topicHash));
     }
     this.emit();
   }
