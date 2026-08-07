@@ -313,6 +313,13 @@ export class Sessions {
   upvote(h: string, targetId: string, up = true) { const r = this.byHash.get(h); return r ? this.append(r, "upvote", { targetId, up }) : Promise.resolve(); }
   postAnswer(h: string, questionId: string, content: string) { const r = this.byHash.get(h); return r ? this.append(r, "answerPost", { answerId: rid(), questionId, content }) : Promise.resolve(); }
   moderate(h: string, questionId: string, hidden: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "moderate", { questionId, hidden }) : Promise.resolve(); }
+  setOpen(h: string, enabled: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "sessionConfig", { enabled }) : Promise.resolve(); }
+  addAdmin(h: string, memberId: string, name = "") { const r = this.byHash.get(h); return r ? this.append(r, "adminAdd", { memberId, name }) : Promise.resolve(); }
+  removeAdmin(h: string, memberId: string) { const r = this.byHash.get(h); return r ? this.append(r, "adminRemove", { memberId }) : Promise.resolve(); }
+  isOwner(h: string): boolean { return this.state(h).owner === this.myAddress; }
+  ownerOf(h: string): string { return this.state(h).owner || ""; }
+  adminsOf(h: string): string[] { return this.state(h).admins || []; }
+  sessionOpen(h: string): boolean { const st = this.state(h); return !st.session || st.session.enabled !== false; }
 
   // Memoized fold: the log is append-only, so its length is a reliable "changed" key.
   // Without this, computeState ran on every render (3s tick + every emit) for a big log,

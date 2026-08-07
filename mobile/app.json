@@ -2,7 +2,7 @@
   "expo": {
     "name": "QAKU",
     "slug": "qaku",
-    "version": "0.1.42",
+    "version": "0.1.43",
     "platforms": [
       "android"
     ],
@@ -12,12 +12,13 @@
     },
     "android": {
       "package": "co.logos.qaku",
-      "versionCode": 41,
+      "versionCode": 42,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundImage": "./assets/adaptive-bg.png",
         "backgroundColor": "#000000"
-      }
+      },
+      "backgroundColor": "#141415"
     },
     "plugins": [
       "./plugins/withSplashColor.js",
@@ -40,6 +41,12 @@
     ],
     "extra": {
       "comment": "versionCode here is the source of truth; assert it matches the generated android/app/build.gradle after prebuild."
-    }
+    },
+    "androidStatusBar": {
+      "backgroundColor": "#141415",
+      "barStyle": "light-content",
+      "translucent": false
+    },
+    "backgroundColor": "#141415"
   }
 }

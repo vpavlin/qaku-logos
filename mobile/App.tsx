@@ -3,7 +3,8 @@
 // with optional display names; a small collapsible sync line keeps the diagnostics out
 // of the way. Palette = the original qaku (dark + gold primary + teal accent).
 import React, { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState, RefreshControl, Image } from "react-native";
+import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState, RefreshControl, Image, StatusBar } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
 import { sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
@@ -97,7 +98,14 @@ function AppInner() {
   const [nameText, setNameText] = useState("");
   const [showDiag, setShowDiag] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [copied, setCopied] = useState("");
+  const [adminModal, setAdminModal] = useState(false);
+  const [adminInput, setAdminInput] = useState("");
   const [permission, requestPermission] = useCameraPermissions();
+
+  const copy = async (text: string, label = "Copied") => {
+    try { await Clipboard.setStringAsync(text); setCopied(label); setTimeout(() => setCopied(""), 1500); } catch { /* */ }
+  };
 
   // Pull-to-refresh → force a full catch-up round (past the rate-limit).
   const onRefresh = async () => {
@@ -177,6 +185,8 @@ function AppInner() {
   if (!openHash) {
     return (
       <SafeAreaView style={s.root}>
+        <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+        {copied ? <View style={s.copiedToast}><Text style={s.copiedToastT}>{copied}</Text></View> : null}
         <View style={s.topRow}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 9 }}>
             <Image source={require("./assets/icon.png")} style={s.logo} />
@@ -218,7 +228,7 @@ function AppInner() {
         {error ? <Text style={s.error}>{error}</Text> : null}
         <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic="" />
         {renderScanner(scanning, setScanning, (d) => { setScanning(false); doJoin(d); })}
-        {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName)}
+        {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName, sessions.myAddress, copy)}
       </SafeAreaView>
     );
   }
@@ -277,6 +287,8 @@ function AppInner() {
   );
   return (
     <SafeAreaView style={s.root}>
+      <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+      {copied ? <View style={s.copiedToast}><Text style={s.copiedToastT}>{copied}</Text></View> : null}
       <View style={s.roomHead}>
         <TouchableOpacity onPress={leaveRoom}><Text style={s.back}>‹ Q&As</Text></TouchableOpacity>
         <Text style={s.roomHeadTitle} numberOfLines={1}>{title}</Text>
@@ -286,10 +298,20 @@ function AppInner() {
       {sessions.isStarred(openHash) ? <TouchableOpacity onPress={() => notifyQuestion(openHash!, "Test notification", "If you can see this, notifications work ✓")}><Text style={s.starHint}>★ Kept live in the background · tap to send a test notification</Text></TouchableOpacity> : null}
       {sessions.syncing ? <Text style={s.syncingHint}>⟳  Syncing this Q&A… questions may still be arriving</Text> : null}
       {(sessions.myName || names[sessions.myAddress]) ? null : <TouchableOpacity onPress={() => { setNameText(sessions.myName); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
-      <View style={s.askRow}>
-        <TextInput style={s.input} placeholder="Ask a question…" placeholderTextColor={C.muted} value={q} onChangeText={setQ} />
-        <TouchableOpacity style={s.btnPrimary} onPress={() => { const v = q.trim(); if (v) sessions.ask(openHash, v).catch(() => {}); setQ(""); }}><Text style={s.btnPrimaryT}>Ask</Text></TouchableOpacity>
-      </View>
+      {admin ? (
+        <View style={s.adminBar}>
+          <TouchableOpacity style={[s.adminChip, !sessions.sessionOpen(openHash) && s.adminChipClosed]} onPress={() => sessions.setOpen(openHash!, !sessions.sessionOpen(openHash!)).catch(() => {})}>
+            <Text style={[s.adminChipT, !sessions.sessionOpen(openHash) && { color: C.danger }]}>{sessions.sessionOpen(openHash) ? "● Open — tap to close" : "○ Closed — tap to open"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={s.adminChip} onPress={() => { setAdminInput(""); setAdminModal(true); }}><Text style={s.adminChipT}>Admins ({sessions.adminsOf(openHash).length})</Text></TouchableOpacity>
+        </View>
+      ) : (!sessions.sessionOpen(openHash) ? <Text style={s.closedHint}>🔒 This Q&A is closed — new questions are disabled</Text> : null)}
+      {sessions.sessionOpen(openHash) ? (
+        <View style={s.askRow}>
+          <TextInput style={s.input} placeholder="Ask a question…" placeholderTextColor={C.muted} value={q} onChangeText={setQ} />
+          <TouchableOpacity style={s.btnPrimary} onPress={() => { const v = q.trim(); if (v) sessions.ask(openHash, v).catch(() => {}); setQ(""); }}><Text style={s.btnPrimaryT}>Ask</Text></TouchableOpacity>
+        </View>
+      ) : null}
       <View style={s.controls}>
         <View style={s.chipRow}>
           <Text style={s.chipLabel}>Sort</Text>
@@ -317,9 +339,10 @@ function AppInner() {
         ) : null}
       </ScrollView>
       <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic={openHash} />
-      {renderShare(shareHash, sessions, setShareHash)}
+      {renderShare(shareHash, setShareHash)}
       {renderScanner(scanning, setScanning, (d) => { setScanning(false); doJoin(d); })}
-      {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName)}
+      {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName, sessions.myAddress, copy)}
+      {renderAdminModal(adminModal, setAdminModal, openHash, adminInput, setAdminInput, copy)}
     </SafeAreaView>
   );
 }
@@ -338,14 +361,16 @@ function SyncLine({ status, show, onToggle, topic }: { status: string; show: boo
   );
 }
 
-function renderNameModal(open: boolean, setOpen: (v: boolean) => void, text: string, setText: (v: string) => void, save: () => void) {
+function renderNameModal(open: boolean, setOpen: (v: boolean) => void, text: string, setText: (v: string) => void, save: () => void, address: string, copy: (t: string, l?: string) => void) {
   return (
     <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
       <View style={s.modalWrap}><View style={s.modalCard}>
         <Text style={s.modalTitle}>Your display name</Text>
         <Text style={s.modalHint}>Shown next to your questions & answers, signed by your key. Others can verify it's really you.</Text>
         <TextInput style={s.modalInput} placeholder="e.g. satoshi" placeholderTextColor={C.muted} value={text} onChangeText={setText} autoFocus autoCapitalize="none" returnKeyType="done" onSubmitEditing={save} />
-        <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
+        <Text style={[s.addrLabel, { marginTop: 14 }]}>Your identity address (share this to be made an admin)</Text>
+        <TouchableOpacity onPress={() => copy(address, "Address copied")}><Text style={s.addrVal} selectable>{address}  ⧉</Text></TouchableOpacity>
+        <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
           <TouchableOpacity style={[s.btnGhost, { flex: 1 }]} onPress={() => setOpen(false)}><Text style={s.btnGhostT}>Cancel</Text></TouchableOpacity>
           <TouchableOpacity style={[s.btnPrimary, { flex: 1 }]} onPress={save}><Text style={s.btnPrimaryT}>Save</Text></TouchableOpacity>
         </View>
@@ -354,7 +379,7 @@ function renderNameModal(open: boolean, setOpen: (v: boolean) => void, text: str
   );
 }
 
-function renderShare(hash: string | null, sessions: Sessions, setHash: (v: string | null) => void) {
+function renderShare(hash: string | null, setHash: (v: string | null) => void) {
   if (!hash) return null;
   const uri = shareUriFor(sessions.secretHex(hash));
   return (
@@ -365,6 +390,41 @@ function renderShare(hash: string | null, sessions: Sessions, setHash: (v: strin
         <Text style={s.modalHint}>Scan to join & sync. The secret is the password — it encrypts every message. Keep it private.</Text>
         <Text selectable style={s.secretTxt}>{sessions.secretHex(hash)}</Text>
         <TouchableOpacity style={[s.btnPrimary, { marginTop: 12 }]} onPress={() => setHash(null)}><Text style={s.btnPrimaryT}>Done</Text></TouchableOpacity>
+      </View></View>
+    </Modal>
+  );
+}
+
+function renderAdminModal(open: boolean, setOpen: (v: boolean) => void, hash: string | null, input: string, setInput: (v: string) => void, copy: (t: string, l?: string) => void) {
+  if (!hash) return null;
+  const owner = sessions.ownerOf(hash);
+  const isOwner = sessions.isOwner(hash);
+  const admins = sessions.adminsOf(hash).filter((a) => a !== owner);
+  const add = () => { const v = input.trim(); if (v) { sessions.addAdmin(hash, v).catch(() => {}); setInput(""); } };
+  return (
+    <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+      <View style={s.modalWrap}><View style={s.modalCard}>
+        <Text style={s.modalTitle}>Admins</Text>
+        <Text style={s.modalHint}>Admins can answer, moderate, open/close, and run polls. Add someone by their identity address (from their name screen), or a Basecamp's device id.</Text>
+        <Text style={s.addrLabel}>Your address{isOwner ? "  (owner)" : ""}</Text>
+        <TouchableOpacity onPress={() => copy(sessions.myAddress, "Address copied")}><Text style={s.addrVal} selectable>{sessions.myAddress}  ⧉</Text></TouchableOpacity>
+        <View style={s.divider} />
+        <Text style={s.addrLabel}>Owner</Text>
+        <Text style={s.addrVal} numberOfLines={1}>{shortAddr(owner)}</Text>
+        {admins.length ? <Text style={[s.addrLabel, { marginTop: 10 }]}>Admins</Text> : null}
+        {admins.map((a) => (
+          <View key={a} style={s.adminRowM}>
+            <Text style={[s.addrVal, { flex: 1 }]} numberOfLines={1}>{shortAddr(a)}</Text>
+            {isOwner ? <TouchableOpacity onPress={() => sessions.removeAdmin(hash, a).catch(() => {})}><Text style={s.removeT}>Remove</Text></TouchableOpacity> : null}
+          </View>
+        ))}
+        <View style={s.divider} />
+        <Text style={s.addrLabel}>Add admin</Text>
+        <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
+          <TextInput style={[s.modalInput, { flex: 1 }]} placeholder="0x… address or device id" placeholderTextColor={C.muted} value={input} onChangeText={setInput} autoCapitalize="none" autoCorrect={false} />
+          <TouchableOpacity style={s.btnPrimary} onPress={add}><Text style={s.btnPrimaryT}>Add</Text></TouchableOpacity>
+        </View>
+        <TouchableOpacity style={[s.btnGhost, { marginTop: 14 }]} onPress={() => setOpen(false)}><Text style={s.btnGhostT}>Done</Text></TouchableOpacity>
       </View></View>
     </Modal>
   );
@@ -442,6 +502,19 @@ const s = StyleSheet.create({
   answerRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   adminRow: { flexDirection: "row", gap: 16, marginTop: 8 },
   adminAction: { color: C.accent, fontSize: 13, fontWeight: "700" },
+  // admin bar (open/close + admins), closed hint, copy toast, address rows
+  adminBar: { flexDirection: "row", gap: 8, marginBottom: 10 },
+  adminChip: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 6 },
+  adminChipClosed: { borderColor: C.danger },
+  adminChipT: { color: C.accent, fontSize: 12, fontWeight: "700" },
+  closedHint: { color: C.danger, fontSize: 12, marginBottom: 10 },
+  copiedToast: { position: "absolute", top: 8, alignSelf: "center", backgroundColor: C.accent, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 6, zIndex: 100 },
+  copiedToastT: { color: C.primaryFg, fontWeight: "800", fontSize: 12 },
+  addrLabel: { color: C.muted, fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5 },
+  addrVal: { color: C.accent, fontSize: 13, fontFamily: "monospace", marginTop: 3 },
+  divider: { height: 1, backgroundColor: C.border, marginVertical: 12 },
+  adminRowM: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 6 },
+  removeT: { color: C.danger, fontSize: 12, fontWeight: "700" },
   // sort/filter controls
   controls: { gap: 6, marginBottom: 10 },
   chipRow: { flexDirection: "row", alignItems: "center", gap: 6 },
