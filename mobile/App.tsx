@@ -270,23 +270,31 @@ function AppInner() {
               : <Text style={s.pubPending} numberOfLines={1}>· ⏳ queued</Text>
           ) : null}
         </View>
-        {(qq.answers || []).map((a: any) => (
+        {(qq.answers || []).map((a: any) => {
+          const acc = qq.acceptedAnswerId === a.id;   // single source of truth (one accepted answer)
+          return (
           <View key={a.id} style={s.answer}>
             <TouchableOpacity style={s.ansUpvote} onPress={() => sessions.upvote(openHash!, a.id).catch(() => {})}>
               <Text style={s.ansUpvoteArrow}>▲</Text><Text style={s.ansUpvoteN}>{a.upvotes || 0}</Text>
             </TouchableOpacity>
             <View style={{ flex: 1 }}>
-              <Text style={[s.answerText, a.accepted && { color: C.accent, fontWeight: "600" }]}>{a.accepted ? "✓ " : ""}{a.content}</Text>
+              <Text style={[s.answerText, acc && { color: C.accent, fontWeight: "600" }]}>{acc ? "✓ " : ""}{a.content}</Text>
               <View style={s.byline}>
                 <Avatar addr={a.author} name={nameOf(a.author)} size={16} />
                 <Text style={s.bylineName} numberOfLines={1}>{nameOf(a.author)}</Text>
                 {a.verified ? <Text style={s.verified}>✓</Text> : null}
-                {a.accepted ? <Text style={s.acceptedTag}>· accepted</Text> : null}
+                {acc ? <Text style={s.acceptedTag}>· accepted</Text> : null}
                 <Text style={s.time} numberOfLines={1}>· {timeAgo(a.ts)}</Text>
+                {admin ? (
+                  <TouchableOpacity onPress={() => sessions.acceptAnswer(openHash!, qq.id, a.id, !acc).catch(() => {})}>
+                    <Text style={s.acceptBtn}>· {acc ? "unaccept" : "accept ✓"}</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             </View>
           </View>
-        ))}
+          );
+        })}
         {admin && (answering === qq.id ? (
           <View style={s.answerRow}>
             <TextInput style={s.inputSm} placeholder="Answer…" placeholderTextColor={C.muted} value={answerText} onChangeText={setAnswerText} autoFocus />
@@ -523,6 +531,7 @@ const s = StyleSheet.create({
   ansUpvoteArrow: { color: C.primary, fontSize: 10 },
   ansUpvoteN: { color: C.text, fontWeight: "800", fontSize: 12 },
   acceptedTag: { color: C.accent, fontSize: 11, fontWeight: "700" },
+  acceptBtn: { color: C.primary, fontSize: 11, fontWeight: "800" },
   answerRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   adminRow: { flexDirection: "row", gap: 16, marginTop: 8 },
   adminAction: { color: C.accent, fontSize: 13, fontWeight: "700" },

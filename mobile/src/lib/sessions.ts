@@ -369,6 +369,7 @@ export class Sessions {
   ask(h: string, content: string) { const r = this.byHash.get(h); return r ? this.append(r, "questionAdd", { questionId: rid(), content }) : Promise.resolve(); }
   upvote(h: string, targetId: string, up = true) { const r = this.byHash.get(h); return r ? this.append(r, "upvote", { targetId, up }) : Promise.resolve(); }
   postAnswer(h: string, questionId: string, content: string) { const r = this.byHash.get(h); return r ? this.append(r, "answerPost", { answerId: rid(), questionId, content }) : Promise.resolve(); }
+  acceptAnswer(h: string, questionId: string, answerId: string, accepted = true) { const r = this.byHash.get(h); return r ? this.append(r, "answerAccept", { questionId, answerId, accepted }) : Promise.resolve(); }
   moderate(h: string, questionId: string, hidden: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "moderate", { questionId, hidden }) : Promise.resolve(); }
   setOpen(h: string, enabled: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "sessionConfig", { enabled }) : Promise.resolve(); }
   addAdmin(h: string, memberId: string, name = "") { const r = this.byHash.get(h); return r ? this.append(r, "adminAdd", { memberId, name }) : Promise.resolve(); }

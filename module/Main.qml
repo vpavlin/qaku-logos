@@ -864,6 +864,7 @@ Item {
                     delegate: Rectangle {
                         id: qCard
                         property bool answering: false   // inline answer box opens on demand (declutter)
+                        property string acceptedId: modelData.acceptedAnswerId || ""   // for the nested answer delegate
                         width: qList.width
                         radius: Theme.spacing.radiusMedium
                         color: root.qkSurface
@@ -949,9 +950,10 @@ Item {
                                         Layout.alignment: Qt.AlignVCenter
                                         spacing: Theme.spacing.tiny
                                         LogosText {
+                                            readonly property bool acc: qCard.acceptedId === modelData.id   // one accepted answer per Q
                                             Layout.fillWidth: true
-                                            text: (modelData.accepted ? "✓  " : "") + (modelData.content || "")
-                                            color: modelData.accepted ? root.qkTeal : "#d8d8e0"
+                                            text: (acc ? "✓  " : "") + (modelData.content || "")
+                                            color: acc ? root.qkTeal : "#d8d8e0"
                                             font.pixelSize: Theme.typography.secondaryText
                                             wrapMode: Text.WordWrap
                                         }
@@ -963,8 +965,16 @@ Item {
                                                 LogosText { anchors.centerIn: parent; text: (modelData.author && modelData.author.length > 2) ? modelData.author.charAt(2).toUpperCase() : "?"; color: root.qkText; font.pixelSize: 8; font.weight: Theme.typography.weightBold }
                                             }
                                             LogosText { text: root.nameOf(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText }
-                                            LogosText { visible: !!modelData.accepted; text: "·  accepted"; color: root.qkTeal; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
+                                            LogosText { visible: qCard.acceptedId === modelData.id; text: "·  accepted"; color: root.qkTeal; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
                                             LogosText { text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; opacity: 0.85 }
+                                            // owner/admin: accept / unaccept this answer
+                                            LogosText {
+                                                visible: root.isAdmin
+                                                text: (qCard.acceptedId === modelData.id) ? "·  unaccept" : "·  accept ✓"
+                                                color: root.qkGold; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightBold
+                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                    onClicked: root.act("acceptAnswer", [modelData.questionId, modelData.id, (qCard.acceptedId === modelData.id) ? "false" : "true"], "Could not accept") }
+                                            }
                                         }
                                     }
                                 }
