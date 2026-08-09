@@ -70,6 +70,7 @@ export class Sessions {
   notifyAttempts = 0;   // diagnostic: how many times we've asked to fire a question notification
   myAddress = "";
   myName = "";
+  nodeMode: "Core" | "Edge" = "Core";
   listeners = new Set<() => void>();
 
   // Flag "syncing" for a few seconds; extended while events keep arriving, so the UI can
@@ -115,6 +116,8 @@ export class Sessions {
     try { this.myName = (await SecureStore.getItemAsync("qaku-myname")) || ""; } catch { /* */ }
     try { const raw = await SecureStore.getItemAsync("qaku-seen"); if (raw) for (const [k, v] of Object.entries(JSON.parse(raw))) this.seenTs.set(k, Number(v)); } catch { /* */ }
     try { const raw = await SecureStore.getItemAsync("qaku-starred"); if (raw) this.starred = new Set(JSON.parse(raw)); } catch { /* */ }
+    try { const m = await SecureStore.getItemAsync("qaku-nodemode"); this.nodeMode = m === "Edge" ? "Edge" : "Core"; } catch { /* */ }
+    transport.setNodeMode(this.nodeMode);   // must be set BEFORE transport.start()
     try { const p = unconfirmedPath(); const info = await FileSystem.getInfoAsync(p); if (info.exists) { const a = JSON.parse(await FileSystem.readAsStringAsync(p)); if (Array.isArray(a)) this.unconfirmed = new Set(a); } } catch { /* */ }
     this.startTime = Date.now();
     for (const meta of await this.loadRegistry()) {
@@ -364,6 +367,13 @@ export class Sessions {
   }
   async currentName(topicHash: string): Promise<string> {
     const st = this.state(topicHash); return (st.names && st.names[this.myAddress]) || "";
+  }
+  // Persist the Core/Edge choice. The node reads mode only at start(), so a change
+  // takes effect on the next app launch — the UI tells the user to relaunch.
+  async setNodeMode(m: "Core" | "Edge") {
+    this.nodeMode = m === "Edge" ? "Edge" : "Core";
+    try { await SecureStore.setItemAsync("qaku-nodemode", this.nodeMode); } catch { /* */ }
+    this.emit();
   }
 
   ask(h: string, content: string) { const r = this.byHash.get(h); return r ? this.append(r, "questionAdd", { questionId: rid(), content }) : Promise.resolve(); }

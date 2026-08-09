@@ -44,6 +44,18 @@ export function shardFor(contentTopic: string, count = 8): number {
 // logos.test stays on cluster 2, which keeps qaku's shard math valid (sha256("qaku"+"1")
 // % 8 = shard 0). Preset + entryNodes must stay in lockstep with qaku_core (C++ desktop).
 const FLEET_PRESET = "logos.test";
+
+// Kernel operating mode. "Core" = full service node (relays the shard, discovers
+// peers via discv5) — safe default, what we've always shipped. "Edge" = client-only
+// (filter-subscribe + lightpush-publish, no shard relay, no discovery): lighter on
+// battery/data, but leans entirely on the fleet + our own Core nodes to carry traffic.
+// Edge-on-cellular was the historical flaky path, so it's OPT-IN and applied at node
+// start — call setNodeMode() BEFORE start(), then relaunch the node to change it.
+export type NodeMode = "Core" | "Edge";
+let NODE_MODE: NodeMode = "Core";
+export function setNodeMode(m: NodeMode) { NODE_MODE = m === "Edge" ? "Edge" : "Core"; }
+export function getNodeMode(): NodeMode { return NODE_MODE; }
+
 export const ENTRY_NODES: string[] = [
   "/dns4/node-01.do-ams3.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmQ9X2xDfPG3uL77V9piYDhjq14JhKCtcmNYsTMKNqrKCj",
   "/dns4/node-02.do-ams3.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmB8NYprrfQrgWVzsJtYWkfjsXbmJEGNMG6othXsQ53BwG",
@@ -163,7 +175,12 @@ export async function start(opts: { deviceId: string; topics: string[]; onReceiv
     // ("shard -, mesh 0" is the no-discovery failure mode). Trade-off: two liblogosdelivery
     // nodes on ONE device now share the default discv5 UDP port (9000) — running both apps
     // at once may collide, which is far rarer than a single app failing to mesh.
-    const config = { mode: "Core", preset: FLEET_PRESET, relay: true, entryNodes: ENTRY_NODES, tcpPort: 0, discv5Discovery: true };
+    // Edge drops relay + discv5 (it neither serves the shard nor discovers peers); it
+    // publishes via lightpush and receives via filter, leaning on the fleet's Core nodes.
+    const config = NODE_MODE === "Edge"
+      ? { mode: "Edge", preset: FLEET_PRESET, entryNodes: ENTRY_NODES, tcpPort: 0 }
+      : { mode: "Core", preset: FLEET_PRESET, relay: true, entryNodes: ENTRY_NODES, tcpPort: 0, discv5Discovery: true };
+    step("mode:" + NODE_MODE);
     const c: string = await LogosMessaging.new(config);
     step("Joining mesh…");
     await LogosMessaging.start(c);

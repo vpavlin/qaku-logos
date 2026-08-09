@@ -395,6 +395,20 @@ function renderNameModal(open: boolean, setOpen: (v: boolean) => void, text: str
         <TextInput style={s.modalInput} placeholder="e.g. satoshi" placeholderTextColor={C.muted} value={text} onChangeText={setText} autoFocus autoCapitalize="none" returnKeyType="done" onSubmitEditing={save} />
         <Text style={[s.addrLabel, { marginTop: 14 }]}>Your identity address (share this to be made an admin)</Text>
         <TouchableOpacity onPress={() => copy(address, "Address copied")}><Text style={s.addrVal} selectable>{address}  ⧉</Text></TouchableOpacity>
+        <Text style={[s.addrLabel, { marginTop: 14 }]}>Network mode (experimental)</Text>
+        <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
+          {(["Core", "Edge"] as const).map((m) => {
+            const active = sessions.nodeMode === m;
+            return (
+              <TouchableOpacity key={m} style={[s.modeChip, active && s.modeChipOn]} onPress={() => sessions.setNodeMode(m)}>
+                <Text style={[s.modeChipT, active && s.modeChipTOn]}>{m}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={s.modeHint}>{sessions.nodeMode === "Edge"
+          ? "Edge: lighter on battery/data — no relay, publishes via lightpush. Experimental. Relaunch the app to apply."
+          : "Core: full node, relays traffic for the network. The reliable default. Relaunch the app to apply a change."}</Text>
         <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
           <TouchableOpacity style={[s.btnGhost, { flex: 1 }]} onPress={() => setOpen(false)}><Text style={s.btnGhostT}>Cancel</Text></TouchableOpacity>
           <TouchableOpacity style={[s.btnPrimary, { flex: 1 }]} onPress={save}><Text style={s.btnPrimaryT}>Save</Text></TouchableOpacity>
@@ -513,6 +527,11 @@ const s = StyleSheet.create({
   starMini: { color: C.primary, fontSize: 13 },
   starHint: { color: C.primary, fontSize: 12, marginBottom: 8, opacity: 0.9 },
   setNameHint: { color: C.primary, fontSize: 12, marginBottom: 8 },
+  modeChip: { flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 8, paddingVertical: 8, alignItems: "center" },
+  modeChipOn: { backgroundColor: C.primary, borderColor: C.primary },
+  modeChipT: { color: C.muted, fontSize: 13, fontWeight: "700" },
+  modeChipTOn: { color: "#ffffff" },
+  modeHint: { color: C.muted, fontSize: 11, marginTop: 6, lineHeight: 15 },
   askRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
   qCard: { flexDirection: "row", gap: 10, backgroundColor: C.surface, borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: C.border },
   upvote: { alignItems: "center", backgroundColor: C.surface2, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, minWidth: 42 },
