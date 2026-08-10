@@ -117,7 +117,7 @@ export class Sessions {
     try { this.myName = (await SecureStore.getItemAsync("qaku-myname")) || ""; } catch { /* */ }
     try { const raw = await SecureStore.getItemAsync("qaku-seen"); if (raw) for (const [k, v] of Object.entries(JSON.parse(raw))) this.seenTs.set(k, Number(v)); } catch { /* */ }
     try { const raw = await SecureStore.getItemAsync("qaku-starred"); if (raw) this.starred = new Set(JSON.parse(raw)); } catch { /* */ }
-    try { const m = await SecureStore.getItemAsync("qaku-nodemode"); this.nodeMode = m === "Edge" ? "Edge" : "Core"; } catch { /* */ }
+    try { const m = await SecureStore.getItemAsync("qaku-nodemode"); this.nodeMode = m === "Core" ? "Core" : "Edge"; } catch { /* */ }
     transport.setNodeMode(this.nodeMode);   // must be set BEFORE transport.start()
     try { this.useSharedNode = (await SecureStore.getItemAsync("qaku-shared-node")) === "1"; } catch { /* */ }
     // Opt into the device-wide shared node; falls back to an embedded node if the service
@@ -376,7 +376,7 @@ export class Sessions {
   // Persist the Core/Edge choice. The node reads mode only at start(), so a change
   // takes effect on the next app launch — the UI tells the user to relaunch.
   async setNodeMode(m: "Core" | "Edge") {
-    this.nodeMode = m === "Edge" ? "Edge" : "Core";
+    this.nodeMode = m === "Core" ? "Core" : "Edge";
     try { await SecureStore.setItemAsync("qaku-nodemode", this.nodeMode); } catch { /* */ }
     this.emit();
   }
