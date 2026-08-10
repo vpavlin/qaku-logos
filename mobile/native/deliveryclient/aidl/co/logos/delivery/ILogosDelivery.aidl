@@ -5,4 +5,5 @@ interface ILogosDelivery {
     void subscribe(String appId, String topic);
     void send(String appId, String topic, in byte[] sealed);
     void unregisterClient(String appId);
+    String metrics();
 }
