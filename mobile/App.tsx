@@ -9,7 +9,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
 import { sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
 import { shortAddr } from "./src/lib/identity";
-import { counters, getRxSample, refreshPeerInfo, shardFor } from "./src/lib/logos-transport";
+import { counters, getRxSample, refreshPeerInfo, shardFor, usingServiceBackend, serviceNodeDown, launchSharedService } from "./src/lib/logos-transport";
 import { initNotifications, notifyQuestion } from "./src/lib/notify";
 import { updateKeepAlive } from "./src/lib/keepalive";
 
@@ -226,6 +226,7 @@ function AppInner() {
           <TouchableOpacity style={[s.btnGhost, busy && s.dim]} disabled={busy} onPress={openScanner}><Text style={s.btnGhostT}>Scan</Text></TouchableOpacity>
         </View>
         {error ? <Text style={s.error}>{error}</Text> : null}
+        {ldBanner()}
         <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic="" />
         {renderScanner(scanning, setScanning, (d) => { setScanning(false); doJoin(d); })}
         {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName, sessions.myAddress, copy)}
@@ -363,12 +364,22 @@ function AppInner() {
           </View>
         ) : null}
       </ScrollView>
+      {ldBanner()}
       <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic={openHash} />
       {renderShare(shareHash, setShareHash)}
       {renderScanner(scanning, setScanning, (d) => { setScanning(false); doJoin(d); })}
       {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName, sessions.myAddress, copy)}
       {renderAdminModal(adminModal, setAdminModal, openHash, adminInput, setAdminInput, copy)}
     </SafeAreaView>
+  );
+}
+
+function ldBanner() {
+  if (!usingServiceBackend() || !serviceNodeDown()) return null;
+  return (
+    <TouchableOpacity style={s.ldBanner} onPress={() => launchSharedService()}>
+      <Text style={s.ldBannerT}>⚠  Logos Delivery isn't running — tap to open</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -541,6 +552,8 @@ const s = StyleSheet.create({
   starMini: { color: C.primary, fontSize: 13 },
   starHint: { color: C.primary, fontSize: 12, marginBottom: 8, opacity: 0.9 },
   setNameHint: { color: C.primary, fontSize: 12, marginBottom: 8 },
+  ldBanner: { backgroundColor: "#2a2114", borderColor: "#e0a35a", borderWidth: 1, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, marginBottom: 8 },
+  ldBannerT: { color: "#e0a35a", fontSize: 13, textAlign: "center", fontWeight: "600" },
   modeChip: { flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 8, paddingVertical: 8, alignItems: "center" },
   modeChipOn: { backgroundColor: C.primary, borderColor: C.primary },
   modeChipT: { color: C.muted, fontSize: 13, fontWeight: "700" },
