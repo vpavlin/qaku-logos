@@ -71,6 +71,7 @@ export class Sessions {
   myAddress = "";
   myName = "";
   nodeMode: "Core" | "Edge" = "Core";
+  useSharedNode = false;   // route through the device-wide Logos Delivery service if installed
   listeners = new Set<() => void>();
 
   // Flag "syncing" for a few seconds; extended while events keep arriving, so the UI can
@@ -118,6 +119,10 @@ export class Sessions {
     try { const raw = await SecureStore.getItemAsync("qaku-starred"); if (raw) this.starred = new Set(JSON.parse(raw)); } catch { /* */ }
     try { const m = await SecureStore.getItemAsync("qaku-nodemode"); this.nodeMode = m === "Edge" ? "Edge" : "Core"; } catch { /* */ }
     transport.setNodeMode(this.nodeMode);   // must be set BEFORE transport.start()
+    try { this.useSharedNode = (await SecureStore.getItemAsync("qaku-shared-node")) === "1"; } catch { /* */ }
+    // Opt into the device-wide shared node; falls back to an embedded node if the service
+    // isn't installed. Must be set BEFORE the first transport call (backend is chosen once).
+    (transport as any).preferServiceBackend?.(this.useSharedNode, "qaku");
     try { const p = unconfirmedPath(); const info = await FileSystem.getInfoAsync(p); if (info.exists) { const a = JSON.parse(await FileSystem.readAsStringAsync(p)); if (Array.isArray(a)) this.unconfirmed = new Set(a); } } catch { /* */ }
     this.startTime = Date.now();
     for (const meta of await this.loadRegistry()) {
@@ -373,6 +378,13 @@ export class Sessions {
   async setNodeMode(m: "Core" | "Edge") {
     this.nodeMode = m === "Edge" ? "Edge" : "Core";
     try { await SecureStore.setItemAsync("qaku-nodemode", this.nodeMode); } catch { /* */ }
+    this.emit();
+  }
+  // Toggle routing through the device-wide Logos Delivery service. Read at start(), so a
+  // change takes effect on the next launch (the UI tells the user to relaunch).
+  async setUseSharedNode(b: boolean) {
+    this.useSharedNode = b;
+    try { await SecureStore.setItemAsync("qaku-shared-node", b ? "1" : "0"); } catch { /* */ }
     this.emit();
   }
 

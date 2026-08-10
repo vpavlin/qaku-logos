@@ -409,6 +409,20 @@ function renderNameModal(open: boolean, setOpen: (v: boolean) => void, text: str
         <Text style={s.modeHint}>{sessions.nodeMode === "Edge"
           ? "Edge: lighter on battery/data — no relay, publishes via lightpush. Experimental. Relaunch the app to apply."
           : "Core: full node, relays traffic for the network. The reliable default. Relaunch the app to apply a change."}</Text>
+        <Text style={[s.addrLabel, { marginTop: 14 }]}>Shared node (experimental)</Text>
+        <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
+          {([["Own node", false], ["Shared", true]] as const).map(([lbl, v]) => {
+            const active = sessions.useSharedNode === v;
+            return (
+              <TouchableOpacity key={lbl} style={[s.modeChip, active && s.modeChipOn]} onPress={() => sessions.setUseSharedNode(v)}>
+                <Text style={[s.modeChipT, active && s.modeChipTOn]}>{lbl}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={s.modeHint}>{sessions.useSharedNode
+          ? "Shared: route through the Logos Delivery app's one device-wide node (you approve QAKU there once). Falls back to its own node if not installed. Relaunch to apply."
+          : "Own node: QAKU runs its own embedded node (default). Relaunch to apply a change."}</Text>
         <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
           <TouchableOpacity style={[s.btnGhost, { flex: 1 }]} onPress={() => setOpen(false)}><Text style={s.btnGhostT}>Cancel</Text></TouchableOpacity>
           <TouchableOpacity style={[s.btnPrimary, { flex: 1 }]} onPress={save}><Text style={s.btnPrimaryT}>Save</Text></TouchableOpacity>

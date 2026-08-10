@@ -2,7 +2,7 @@
   "expo": {
     "name": "QAKU",
     "slug": "qaku",
-    "version": "0.1.54",
+    "version": "0.1.55",
     "platforms": [
       "android"
     ],
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "co.logos.qaku",
-      "versionCode": 54,
+      "versionCode": 55,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundImage": "./assets/adaptive-bg.png",
@@ -37,7 +37,8 @@
           "color": "#ffc533"
         }
       ],
-      "./plugins/withForegroundService.js"
+      "./plugins/withForegroundService.js",
+      "./plugins/withDeliveryClient.js"
     ],
     "extra": {
       "comment": "versionCode here is the source of truth; assert it matches the generated android/app/build.gradle after prebuild."
