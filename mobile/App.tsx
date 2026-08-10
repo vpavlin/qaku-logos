@@ -9,7 +9,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
 import { sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
 import { shortAddr } from "./src/lib/identity";
-import { counters, getRxSample, refreshPeerInfo, shardFor, usingServiceBackend, serviceNodeDown, launchSharedService } from "./src/lib/logos-transport";
+import { counters, getRxSample, refreshPeerInfo, shardFor, usingServiceBackend, serviceNodeDown, serviceAwaitingApproval, launchSharedService } from "./src/lib/logos-transport";
 import { initNotifications, notifyQuestion } from "./src/lib/notify";
 import { updateKeepAlive } from "./src/lib/keepalive";
 
@@ -375,10 +375,18 @@ function AppInner() {
 }
 
 function ldBanner() {
-  if (!usingServiceBackend() || !serviceNodeDown()) return null;
+  if (!usingServiceBackend()) return null;
+  const down = serviceNodeDown();
+  const waiting = serviceAwaitingApproval();
+  if (!down && !waiting) return null;
   return (
-    <TouchableOpacity style={s.ldBanner} onPress={() => launchSharedService()}>
-      <Text style={s.ldBannerT}>⚠  Logos Delivery isn't running — tap to open</Text>
+    <TouchableOpacity style={s.ldBanner} activeOpacity={0.85} onPress={() => launchSharedService()}>
+      <Text style={s.ldBannerIcon}>{down ? "⚠️" : "🔒"}</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={s.ldBannerT}>{down ? "Logos Delivery isn't running" : "QAKU isn't approved yet"}</Text>
+        <Text style={s.ldBannerSub}>{down ? "Tap to open it — QAKU can't sync until it's running." : "Tap to open Logos Delivery and approve QAKU."}</Text>
+      </View>
+      <Text style={s.ldBannerCta}>OPEN ›</Text>
     </TouchableOpacity>
   );
 }
@@ -552,8 +560,11 @@ const s = StyleSheet.create({
   starMini: { color: C.primary, fontSize: 13 },
   starHint: { color: C.primary, fontSize: 12, marginBottom: 8, opacity: 0.9 },
   setNameHint: { color: C.primary, fontSize: 12, marginBottom: 8 },
-  ldBanner: { backgroundColor: "#2a2114", borderColor: "#e0a35a", borderWidth: 1, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, marginBottom: 8 },
-  ldBannerT: { color: "#e0a35a", fontSize: 13, textAlign: "center", fontWeight: "600" },
+  ldBanner: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#c2410c", borderRadius: 12, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10 },
+  ldBannerIcon: { fontSize: 24 },
+  ldBannerT: { color: "#ffffff", fontSize: 15, fontWeight: "800" },
+  ldBannerSub: { color: "#ffe3cf", fontSize: 12, marginTop: 2, lineHeight: 16 },
+  ldBannerCta: { color: "#ffffff", fontSize: 14, fontWeight: "800" },
   modeChip: { flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 8, paddingVertical: 8, alignItems: "center" },
   modeChipOn: { backgroundColor: C.primary, borderColor: C.primary },
   modeChipT: { color: C.muted, fontSize: 13, fontWeight: "700" },
