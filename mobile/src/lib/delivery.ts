@@ -1,15 +1,15 @@
-// QAKU's thin adapter over the SHARED logos-transport. The transport moves opaque
+// QAKU's thin adapter over the SHARED loam-transport. The transport moves opaque
 // sealed bytes on topics and cannot drift from KYM; this file supplies ONLY the two
 // app-specific things: qaku's TOPIC (namespace) and its CRYPTO (seal/open) + envelope
-// dispatch (EVENT / SYNC_REQ). If sync ever breaks again, the bug is in logos-transport
+// dispatch (EVENT / SYNC_REQ). If sync ever breaks again, the bug is in loam-transport
 // (shared, so fix it once) or here (crypto/envelope) — never a re-implemented wire path.
 import { deriveIdentity, topicFor, seal, open, Identity } from "./crypto";
 import { getDeviceId } from "./device";
 import { utf8Bytes, utf8Decode } from "./utf8";
-import * as transport from "./logos-transport";
+import * as transport from "./loam-transport";
 
 // Re-export the transport's diagnostics/helpers so existing UI imports keep working.
-export { counters, getRxSample } from "./logos-transport";
+export { counters, getRxSample } from "./loam-transport";
 
 let identity: Identity | null = null;
 let topic = "";

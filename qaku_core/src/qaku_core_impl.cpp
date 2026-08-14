@@ -591,7 +591,7 @@ void QakuCoreImpl::bootstrapDelivery() {
     // CLUSTER 3 while liblogosdelivery's baked preset still maps logos.dev→cluster 2 — so
     // a fresh node dialed the now-cluster-3 boxes with cluster-2 config and never meshed.
     // logos.test stays cluster 2, keeping qaku's shard (sha256("qaku"+"1") % 8 = 0) valid.
-    // Keep preset + entryNodes in lockstep with mobile (logos-transport.ts ENTRY_NODES).
+    // Keep preset + entryNodes in lockstep with mobile (loam-transport.ts ENTRY_NODES).
     LogosMap cfg = {
         {"logLevel", "INFO"}, {"mode", "Core"}, {"preset", "logos.test"}, {"relay", true},
         {"entryNodes", LogosMap::array({

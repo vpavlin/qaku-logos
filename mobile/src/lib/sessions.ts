@@ -1,9 +1,9 @@
 // QAKU multi-session manager: ONE embedded node, N Q&As. Each joined Q&A ("room") has
 // its own shared secret → seal/open key + derived content topic + event log; they all
-// ride the shared logos-transport (multi-topic). This is qaku's analogue of KYM's
+// ride the shared loam-transport (multi-topic). This is qaku's analogue of KYM's
 // multi-budget: a registry of joined rooms, per-room fold, and authoring that SIGNS with
 // this device's key (verifiable author) and SEALS with the room's household key.
-import * as transport from "./logos-transport";
+import * as transport from "./loam-transport";
 import { deriveIdentity, topicFor, seal, open, newSecret, Identity as SealId } from "./crypto";
 import { encodeEvent } from "./wire";
 import { utf8Bytes, utf8Decode } from "./utf8";

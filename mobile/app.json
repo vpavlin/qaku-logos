@@ -2,7 +2,7 @@
   "expo": {
     "name": "QAKU",
     "slug": "qaku",
-    "version": "0.1.59",
+    "version": "0.1.60",
     "platforms": [
       "android"
     ],
@@ -11,8 +11,8 @@
       "onDemandFilesystem": false
     },
     "android": {
-      "package": "co.logos.qaku",
-      "versionCode": 59,
+      "package": "xyz.vpavlin.qaku",
+      "versionCode": 60,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundImage": "./assets/adaptive-bg.png",
@@ -38,7 +38,7 @@
         }
       ],
       "./plugins/withForegroundService.js",
-      "./src/lib/logos-transport-pkg/plugins/withDeliveryClient.js"
+      "./src/lib/loam-transport-pkg/plugins/withDeliveryClient.js"
     ],
     "extra": {
       "comment": "versionCode here is the source of truth; assert it matches the generated android/app/build.gradle after prebuild."

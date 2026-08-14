@@ -9,7 +9,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
 import { sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
 import { shortAddr } from "./src/lib/identity";
-import { counters, getRxSample, refreshPeerInfo, shardFor, usingServiceBackend, serviceNodeDown, serviceAwaitingApproval, launchSharedService } from "./src/lib/logos-transport";
+import { counters, getRxSample, refreshPeerInfo, shardFor, usingServiceBackend, serviceNodeDown, serviceAwaitingApproval, launchSharedService } from "./src/lib/loam-transport";
 import { initNotifications, notifyQuestion } from "./src/lib/notify";
 import { updateKeepAlive } from "./src/lib/keepalive";
 
