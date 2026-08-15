@@ -226,7 +226,7 @@ function AppInner() {
           <TouchableOpacity style={[s.btnGhost, busy && s.dim]} disabled={busy} onPress={openScanner}><Text style={s.btnGhostT}>Scan</Text></TouchableOpacity>
         </View>
         {error ? <Text style={s.error}>{error}</Text> : null}
-        {ldBanner()}
+        <SharedNodeStatus appName="QAKU" />
         <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic="" />
         {renderScanner(scanning, setScanning, (d) => { setScanning(false); doJoin(d); })}
         {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName, sessions.myAddress, copy)}
@@ -364,7 +364,7 @@ function AppInner() {
           </View>
         ) : null}
       </ScrollView>
-      {ldBanner()}
+      <SharedNodeStatus appName="QAKU" />
       <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic={openHash} />
       {renderShare(shareHash, setShareHash)}
       {renderScanner(scanning, setScanning, (d) => { setScanning(false); doJoin(d); })}
@@ -374,22 +374,6 @@ function AppInner() {
   );
 }
 
-function ldBanner() {
-  if (!usingServiceBackend()) return null;
-  const down = serviceNodeDown();
-  const waiting = serviceAwaitingApproval();
-  if (!down && !waiting) return null;
-  return (
-    <TouchableOpacity style={s.ldBanner} activeOpacity={0.85} onPress={() => launchSharedService()}>
-      <Text style={s.ldBannerIcon}>{down ? "⚠️" : "🔒"}</Text>
-      <View style={{ flex: 1 }}>
-        <Text style={s.ldBannerT}>{down ? "Logos Delivery isn't running" : "QAKU isn't approved yet"}</Text>
-        <Text style={s.ldBannerSub}>{down ? "Tap to open it — QAKU can't sync until it's running." : "Tap to open Logos Delivery and approve QAKU."}</Text>
-      </View>
-      <Text style={s.ldBannerCta}>OPEN ›</Text>
-    </TouchableOpacity>
-  );
-}
 
 function SyncLine({ status, show, onToggle, topic }: { status: string; show: boolean; onToggle: () => void; topic: string }) {
   const meshBad = counters.mesh === 0;
