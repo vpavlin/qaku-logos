@@ -11,6 +11,7 @@ import { sessions, shareUriFor, extractSecret } from "./src/lib/sessions";
 import { shortAddr } from "./src/lib/identity";
 import { counters, getRxSample, refreshPeerInfo, shardFor, usingServiceBackend, serviceNodeDown, serviceAwaitingApproval, launchSharedService } from "./src/lib/loam-transport";
 import { SharedNodeStatus } from "./src/lib/loam-transport-pkg/src/SharedNodeStatus";
+import { LoamDebug } from "./src/lib/loam-transport-pkg/src/LoamDebug";
 import { initNotifications, notifyQuestion } from "./src/lib/notify";
 import { updateKeepAlive } from "./src/lib/keepalive";
 
@@ -229,6 +230,7 @@ function AppInner() {
         {error ? <Text style={s.error}>{error}</Text> : null}
         <SharedNodeStatus appName="QAKU" />
         <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic="" />
+        <LoamDebug appName="QAKU" extra={() => ({ rooms: rooms.length, syncing: sessions.syncing ? "yes" : "no" })} />
         {renderScanner(scanning, setScanning, (d) => { setScanning(false); doJoin(d); })}
         {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName, sessions.myAddress, copy)}
       </SafeAreaView>
