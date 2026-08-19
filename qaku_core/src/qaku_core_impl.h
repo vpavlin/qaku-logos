@@ -26,8 +26,10 @@
 #include <set>
 #include <map>
 #include <mutex>
+#include <memory>
 
 class QTimer;
+#include "overlay_server.h"
 #include "logos_module_context.h"
 #include "qaku_engine.hpp"
 #include "qaku_crypto.hpp"
@@ -81,6 +83,10 @@ public:
     std::string setSecret(std::string secretHex);
     std::string setDeviceId(std::string deviceId);
     std::string setName(std::string name);
+
+    // --- OBS stream overlay (a loopback HTTP page for a Browser Source) ---
+    // patchJson merges {"enabled":bool,"port":int} over the persisted config.
+    std::string setOverlay(std::string patchJson);
     std::string ingestSealed(std::string sealedHex);
     std::string resync();
 
@@ -171,6 +177,20 @@ private:
 
     // diagnostic counters (surfaced in snapshot, per logos-distributed-debugging)
     long m_rxRaw = 0, m_rxSeen = 0, m_rxOpened = 0, m_rxOpenFail = 0, m_rxNew = 0, m_rxDup = 0, m_txTotal = 0;
+
+    // --- OBS overlay ---
+    // The server publishes overlayPayload(), a REDUCED projection. It must never
+    // be handed m_snapshot: that carries `secret`/`shareUri`, i.e. write access to
+    // the Q&A, and the overlay port is unauthenticated by design.
+    std::unique_ptr<OverlayServer> m_overlay;
+    bool m_overlayEnabled = false;
+    unsigned short m_overlayPort = 7337;
+    std::string m_overlayError;
+    long long m_rev = 0;               // bumped per publishState; the page re-renders only when it moves
+    std::string overlayPayload();
+    void loadOverlayConfig();
+    void saveOverlayConfig();
+    void applyOverlayConfig();         // start/stop the listener to match m_overlayEnabled
 
     std::recursive_mutex m_mtx;
     QTimer* m_hubTimer = nullptr;

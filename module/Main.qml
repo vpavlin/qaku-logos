@@ -173,6 +173,9 @@ Item {
     property bool shareOpen: false     // the Share card is collapsed by default (declutter)
     property bool showDiag: false      // the SYNC/TRANSPORT diagnostics are hidden by default
     property bool hiddenOpen: false
+    readonly property bool overlayOn: (root.st.overlay && root.st.overlay.enabled) ? true : false
+    readonly property string overlayErr: (root.st.overlay && root.st.overlay.error) ? String(root.st.overlay.error) : ""
+
     function answeredOf(q) { return (q.answers && q.answers.length > 0) || (q.acceptedAnswerId ? true : false); }
     readonly property var visibleQuestions: {
         var qs = root.questions.filter(function (x) { return !x.moderated; });
@@ -474,6 +477,98 @@ Item {
                             implicitWidth: 64; implicitHeight: 30
                             onClicked: { clip.text = root.st.address || root.st.deviceId || ""; clip.selectAll(); clip.copy(); root.toast("Identity address copied"); }
                         }
+                    }
+
+                    // ---- OBS stream overlay ----
+                    // qaku_core serves a transparent HTML page on loopback; point an OBS
+                    // Browser Source at the URL below. The overlay mirrors the question
+                    // list automatically, and honors Hide — hiding a question here removes
+                    // it from the stream too.
+                    Item { Layout.preferredHeight: Theme.spacing.tiny }
+                    LogosText {
+                        text: "STREAM OVERLAY"
+                        color: Theme.palette.textTertiary
+                        font.pixelSize: Theme.typography.badgeText
+                        font.weight: Theme.typography.weightMedium
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.spacing.small
+                        // A chip, not a CheckBox/Switch: only LogosText/LogosButton load
+                        // reliably across Basecamp versions (see the constraints at the top
+                        // of this file), so this copies the sort/filter chip pattern.
+                        Rectangle {
+                            id: ovlChip
+                            implicitWidth: 52; implicitHeight: 26
+                            radius: 4
+                            color: root.overlayOn ? root.qkGold : root.qkSurface2
+                            border.width: 1
+                            border.color: root.overlayOn ? root.qkGold : root.qkBorder
+                            LogosText {
+                                anchors.centerIn: parent
+                                text: root.overlayOn ? "ON" : "OFF"
+                                color: root.overlayOn ? root.qkBg : root.qkMuted
+                                font.pixelSize: Theme.typography.badgeText
+                                font.weight: Theme.typography.weightMedium
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.act("setOverlay",
+                                                    [JSON.stringify({ enabled: !root.overlayOn,
+                                                                      port: parseInt(ovlPort.text) || 7337 })],
+                                                    "Could not toggle the overlay")
+                            }
+                        }
+                        AppField {
+                            id: ovlPort
+                            Layout.preferredWidth: 66
+                            text: String((root.st.overlay && root.st.overlay.port) || 7337)
+                            inputMethodHints: Qt.ImhDigitsOnly
+                        }
+                        LogosButton {
+                            text: "Save"
+                            implicitWidth: 56; implicitHeight: 30
+                            enabled: ovlPort.text !== String((root.st.overlay && root.st.overlay.port) || 7337)
+                            onClicked: root.act("setOverlay",
+                                                [JSON.stringify({ enabled: root.overlayOn,
+                                                                  port: parseInt(ovlPort.text) || 7337 })],
+                                                "Could not set the overlay port")
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.spacing.small
+                        visible: root.overlayOn && !root.overlayErr
+                        LogosText {
+                            Layout.fillWidth: true
+                            text: (root.st.overlay && root.st.overlay.url) || ""
+                            color: root.qkTeal
+                            font.pixelSize: Theme.typography.badgeText
+                            font.family: "monospace"
+                            wrapMode: Text.WrapAnywhere
+                        }
+                        LogosButton {
+                            text: "Copy"
+                            implicitWidth: 64; implicitHeight: 30
+                            onClicked: { clip.text = (root.st.overlay && root.st.overlay.url) || ""; clip.selectAll(); clip.copy(); root.toast("Overlay URL copied - paste into an OBS Browser Source"); }
+                        }
+                    }
+                    LogosText {
+                        Layout.fillWidth: true
+                        visible: root.overlayErr !== ""
+                        text: "Overlay: " + root.overlayErr
+                        color: Theme.palette.error
+                        font.pixelSize: Theme.typography.badgeText
+                        wrapMode: Text.WordWrap
+                    }
+                    LogosText {
+                        Layout.fillWidth: true
+                        visible: root.overlayOn && !root.overlayErr
+                        text: "Add a Browser Source in OBS with this URL, 420x1080."
+                        color: root.qkMuted
+                        font.pixelSize: Theme.typography.badgeText
+                        wrapMode: Text.WordWrap
                     }
                 }
 

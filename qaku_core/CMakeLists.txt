@@ -10,6 +10,11 @@ endif()
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/metadata.json" METADATA_JSON)
 string(JSON MODULE_NAME GET ${METADATA_JSON} name)
 find_package(OpenSSL REQUIRED)
+# Qt6::Network only. It is part of qtbase and already present (the SDK's
+# logos_find_qt() requires Qt6::RemoteObjects, which links Network transitively),
+# so this needs no nix.packages entry and no flake re-pin. Qt6::HttpServer would:
+# it is a separate derivation the Basecamp runtime does not ship at all on macOS.
+find_package(Qt6 REQUIRED COMPONENTS Network)
 logos_module(
     NAME ${MODULE_NAME}
     SOURCES
@@ -22,7 +27,10 @@ logos_module(
         src/qaku_persist_std.hpp
         src/qrcodegen.hpp
         src/qrcodegen.cpp
+        src/overlay_server.h
+        src/overlay_server.cpp
+        src/overlay_assets.h
     INCLUDE_DIRS src
     FIND_PACKAGES OpenSSL
-    LINK_LIBRARIES OpenSSL::Crypto
+    LINK_LIBRARIES OpenSSL::Crypto Qt6::Network
 )
