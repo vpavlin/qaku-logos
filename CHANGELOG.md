@@ -4,13 +4,17 @@
 
 qaku_core can now publish the live Q&A as a transparent HTML page on loopback, so a
 session can be composited into a stream with an OBS Browser Source. The overlay is a
-semi-transparent left sidebar: the qaku duck, the session topic, and every question
-with its answers, ordered by upvotes and slowly auto-scrolling so a long list still
-gets screen time. It mirrors the session automatically - hiding a question in qaku
-also removes it from the stream, so the existing Hide button is the only moderation
-path there needs to be.
+semi-transparent left sidebar: the qaku duck, the session topic, and the questions the
+host has chosen, each with its answers.
 
-### qaku_core 0.1.15 (engine + sync core)
+The host curates it. Every question in the qaku list gets a "+ STREAM" toggle while the
+overlay is running, and only what is toggled reaches the page - nothing appears on air
+by itself. Nothing scrolls or animates either, so the panel never moves under a viewer
+mid-sentence. Deselecting everything fades the panel off the stream, which is the
+clear/blank control. Hiding a question in qaku also drops it from the overlay, so the
+existing Hide button remains the only moderation path there needs to be.
+
+### qaku_core 0.1.16 (engine + sync core)
 - New `overlay_server.{h,cpp}`: a minimal HTTP/1.1 GET server over `QTcpServer`,
   serving `/` (the page) and `/overlay.json` (the data). Not `QHttpServer` - that is
   a separate Qt component the Basecamp runtime does not ship (and macOS Basecamp has
@@ -22,6 +26,11 @@ path there needs to be.
   path resolution.
 - New `setOverlay(patchJson)` action, `{enabled, port}` persisted to
   `<dataDir>/overlay.json`, and an `overlay` block in the snapshot. Default OFF.
+- New `setOnStream(questionId, on)` / `clearOnStream()` actions and an `onStream` flag
+  per question in the snapshot. The selection is per-session local state in
+  `<sessionDir>/onstream.json` and is deliberately NOT an event: pushing it through the
+  log would broadcast the host's stream direction - which question they are about to
+  answer on air - to every participant's device.
 - Privacy: the overlay serves a REDUCED projection built separately from the
   snapshot. The snapshot carries `secret`/`shareUri` - the pairing code, i.e. write
   access to the Q&A - and the overlay port is unauthenticated because a Browser
@@ -32,11 +41,13 @@ path there needs to be.
 - A bind failure is reported through the snapshot rather than falling back to an
   ephemeral port, which would silently break the URL already pasted into OBS.
 
-### qaku view 0.1.19
+### qaku view 0.1.20
 - Sidebar gains a STREAM OVERLAY block: an ON/OFF chip, a port field, the localhost
-  URL with a Copy button, and the bind error when there is one. The chip is a
-  Rectangle + MouseArea like the sort/filter chips, not a CheckBox/Switch, which do
-  not load reliably across Basecamp versions.
+  URL with a Copy button, a live "N questions on stream" count with a Clear button, and
+  the bind error when there is one.
+- Each question gains a "+ STREAM" / "ON STREAM" toggle, shown only while the overlay
+  is running. Both are Rectangle + MouseArea like the sort/filter chips, not a
+  CheckBox/Switch, which do not load reliably across Basecamp versions.
 
 ## v0.1.7 — on-disk persistence (sessions + messages survive restart)
 

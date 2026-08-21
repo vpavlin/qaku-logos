@@ -38,7 +38,11 @@ inline const std::string kIndexHtml = R"QAKUOVL(<!doctype html>
     background: rgba(20, 20, 21, var(--opacity, 0.72));
     border-right: 1px solid rgba(48, 48, 53, 0.9);
     display: flex; flex-direction: column;
+    transition: opacity .45s ease;
   }
+  /* Deselect everything and the whole panel fades off the stream. That IS the
+     clear/blank control - the host does not need a separate one. */
+  #panel.blank { opacity: 0; pointer-events: none; }
 
   header {
     display: flex; align-items: center; gap: 12px;
@@ -55,12 +59,10 @@ inline const std::string kIndexHtml = R"QAKUOVL(<!doctype html>
   }
   #count { font-size: 12px; color: #9f9fab; margin-top: 3px; letter-spacing: .04em; text-transform: uppercase; }
 
-  /* Scroll viewport. Overflow hidden + a translated inner track, so the loop is a
-     transform (GPU) rather than a scroll the compositor has to chase. */
-  #view { position: relative; flex: 1 1 auto; overflow: hidden;
-          -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
-          mask-image: linear-gradient(to bottom, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%); }
-  #track { position: absolute; top: 0; left: 0; right: 0; padding: 14px 18px 24px; will-change: transform; }
+  /* The host picks what is on screen, so the list never moves on its own - no
+     auto-scroll, nothing drifting under the viewer mid-sentence. */
+  #view { position: relative; flex: 1 1 auto; overflow: hidden; }
+  #track { padding: 14px 18px 24px; }
 
   .q { background: #1a1a1d; border: 1px solid #303035; border-radius: 6px;
        padding: 12px; margin-bottom: 8px; display: flex; gap: 10px; }
@@ -98,14 +100,14 @@ inline const std::string kIndexHtml = R"QAKUOVL(<!doctype html>
     </div>
   </header>
   <div id="offline">overlay disconnected - is qaku_core running?</div>
-  <div id="view"><div id="track"><div id="empty">Waiting for questions...</div></div></div>
+  <div id="view"><div id="track"></div></div>
 </div>
 
 <script>
 (function () {
   "use strict";
 
-  // Tuning without a rebuild: ?w=420&opacity=0.72&speed=15
+  // Tuning without a rebuild: ?w=420&opacity=0.72
   var qs = new URLSearchParams(location.search);
   var num = function (k, dflt, lo, hi) {
     var v = parseFloat(qs.get(k));
@@ -113,11 +115,10 @@ inline const std::string kIndexHtml = R"QAKUOVL(<!doctype html>
   };
   var WIDTH   = num("w", 420, 200, 1200);
   var OPACITY = num("opacity", 0.72, 0, 1);
-  var SPEED   = num("speed", 15, 3, 120);   // seconds to travel one screen height
   document.documentElement.style.setProperty("--w", WIDTH + "px");
   document.documentElement.style.setProperty("--opacity", String(OPACITY));
 
-  var view  = document.getElementById("view");
+  var panel = document.getElementById("panel");
   var track = document.getElementById("track");
   var topic = document.getElementById("topic");
   var count = document.getElementById("count");
@@ -142,11 +143,10 @@ inline const std::string kIndexHtml = R"QAKUOVL(<!doctype html>
     topic.textContent = data.title || "QAKU";
     var qs_ = data.questions || [];
     count.textContent = qs_.length === 1 ? "1 question" : qs_.length + " questions";
+    // (only what the host selected reaches this page - see overlayPayload)
 
-    if (!qs_.length) {
-      track.innerHTML = '<div id="empty">Waiting for questions...</div>';
-      return;
-    }
+    panel.classList.toggle("blank", qs_.length === 0);
+    if (!qs_.length) { track.innerHTML = ""; return; }
 
     var html = "";
     for (var i = 0; i < qs_.length; i++) {
@@ -169,40 +169,6 @@ inline const std::string kIndexHtml = R"QAKUOVL(<!doctype html>
     }
     track.innerHTML = html;
   }
-
-  // ---- auto-scroll: drift down one screen every SPEED seconds, hold, ease back ----
-  var offset = 0, phase = "scroll", phaseStart = 0, last = 0, backFrom = 0;
-  var HOLD_MS = 2500, RETURN_MS = 1100, TOP_HOLD_MS = 1000;
-
-  function maxOffset() { return Math.max(0, track.scrollHeight - view.clientHeight); }
-
-  function frame(now) {
-    if (!last) last = now;
-    var dt = Math.min(100, now - last);   // a stalled tab must not teleport the list
-    last = now;
-
-    var max = maxOffset();
-    if (max <= 0) {
-      offset = 0; phase = "scroll"; phaseStart = 0;
-    } else if (phase === "scroll") {
-      offset += (view.clientHeight / (SPEED * 1000)) * dt;
-      if (offset >= max) { offset = max; phase = "hold"; phaseStart = now; }
-    } else if (phase === "hold") {
-      if (now - phaseStart >= HOLD_MS) { phase = "back"; phaseStart = now; backFrom = offset; }
-    } else if (phase === "back") {
-      var t = Math.min(1, (now - phaseStart) / RETURN_MS);
-      var e = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;   // ease-in-out
-      offset = backFrom * (1 - e);
-      if (t >= 1) { offset = 0; phase = "tophold"; phaseStart = now; }
-    } else if (phase === "tophold") {
-      if (now - phaseStart >= TOP_HOLD_MS) { phase = "scroll"; }
-    }
-
-    if (offset > max) offset = max;   // content shrank under us (a question was hidden)
-    track.style.transform = "translateY(" + (-offset).toFixed(2) + "px)";
-    requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
 
   // ---- poll ----
   // Matches the desktop view's own stance (Main.qml: module events are not

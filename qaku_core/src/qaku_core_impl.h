@@ -74,6 +74,11 @@ public:
     std::string acceptAnswer(std::string questionId, std::string answerId, std::string accepted);
     std::string moderate(std::string questionId, std::string hidden);
 
+    // --- stream overlay selection (LOCAL presentation state, never broadcast) ---
+    // on = "true"/"false". Picks which questions the OBS overlay shows.
+    std::string setOnStream(std::string questionId, std::string on);
+    std::string clearOnStream();
+
     // --- polls ---
     std::string createPoll(std::string question, std::string optionsJson, std::string active);
     std::string setPollActive(std::string pollId, std::string active);
@@ -111,6 +116,10 @@ private:
         std::string dir;               // on-disk dir (m_dataDir + "/" + id); "" = not persisting
         bool haveKey = false;
         bool subscribed = false;
+        // Question ids the host has put on the stream overlay. Deliberately NOT an
+        // event: this is a local presentation choice, and pushing it through the log
+        // would broadcast the host's stream direction to every participant.
+        std::set<std::string> onStream;
         long long wall = 0, ctr = 0;
     };
 
@@ -189,6 +198,8 @@ private:
     long long m_rev = 0;               // bumped per publishState; the page re-renders only when it moves
     std::string overlayPayload();
     void loadOverlayConfig();
+    void loadOnStream(Session& s);
+    void saveOnStream(Session& s);
     void saveOverlayConfig();
     void applyOverlayConfig();         // start/stop the listener to match m_overlayEnabled
 

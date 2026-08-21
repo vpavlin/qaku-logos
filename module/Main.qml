@@ -173,6 +173,11 @@ Item {
     property bool shareOpen: false     // the Share card is collapsed by default (declutter)
     property bool showDiag: false      // the SYNC/TRANSPORT diagnostics are hidden by default
     property bool hiddenOpen: false
+    readonly property int onStreamCount: {
+        var n = 0, qs = root.st.questions || [];
+        for (var i = 0; i < qs.length; i++) if (qs[i].onStream) n++;
+        return n;
+    }
     readonly property bool overlayOn: (root.st.overlay && root.st.overlay.enabled) ? true : false
     readonly property string overlayErr: (root.st.overlay && root.st.overlay.error) ? String(root.st.overlay.error) : ""
 
@@ -562,10 +567,30 @@ Item {
                         font.pixelSize: Theme.typography.badgeText
                         wrapMode: Text.WordWrap
                     }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.spacing.small
+                        visible: root.overlayOn && !root.overlayErr
+                        LogosText {
+                            Layout.fillWidth: true
+                            text: root.onStreamCount === 0
+                                  ? "Nothing on stream - overlay is blank"
+                                  : root.onStreamCount + (root.onStreamCount === 1 ? " question on stream" : " questions on stream")
+                            color: root.onStreamCount === 0 ? root.qkMuted : root.qkGold
+                            font.pixelSize: Theme.typography.badgeText
+                            wrapMode: Text.WordWrap
+                        }
+                        LogosButton {
+                            text: "Clear"
+                            implicitWidth: 60; implicitHeight: 30
+                            enabled: root.onStreamCount > 0
+                            onClicked: root.act("clearOnStream", [], "Could not clear the stream selection")
+                        }
+                    }
                     LogosText {
                         Layout.fillWidth: true
                         visible: root.overlayOn && !root.overlayErr
-                        text: "Add a Browser Source in OBS with this URL, 420x1080."
+                        text: "Pick questions with + STREAM. Browser Source in OBS, 420x1080."
                         color: root.qkMuted
                         font.pixelSize: Theme.typography.badgeText
                         wrapMode: Text.WordWrap
@@ -1014,6 +1039,35 @@ Item {
                                         LogosText { text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; opacity: 0.85 }
                                         // Our own question not yet dispatched to the network (see qaku_core m_unpublished).
                                         LogosText { visible: !!modelData.queued; text: "·  ⏳ queued"; color: root.qkGold; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightBold }
+                                        Item { Layout.preferredWidth: Theme.spacing.tiny; visible: root.overlayOn }
+                                        // Stream overlay pick. Only shown while the overlay is running - it is
+                                        // meaningless otherwise, and the row is already busy. A Rectangle +
+                                        // MouseArea like the sort/filter chips; CheckBox/Switch do not load
+                                        // reliably across Basecamp versions (see the notes at the top).
+                                        Rectangle {
+                                            visible: root.overlayOn
+                                            implicitWidth: streamLbl.implicitWidth + 14
+                                            implicitHeight: 20
+                                            radius: 10
+                                            color: modelData.onStream ? root.qkGold : "transparent"
+                                            border.width: 1
+                                            border.color: modelData.onStream ? root.qkGold : root.qkBorder
+                                            LogosText {
+                                                id: streamLbl
+                                                anchors.centerIn: parent
+                                                text: modelData.onStream ? "● ON STREAM" : "+ STREAM"
+                                                color: modelData.onStream ? root.qkBg : root.qkMuted
+                                                font.pixelSize: Theme.typography.badgeText
+                                                font.weight: Theme.typography.weightMedium
+                                            }
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.act("setOnStream",
+                                                                    [modelData.id, modelData.onStream ? "false" : "true"],
+                                                                    "Could not change the stream selection")
+                                            }
+                                        }
                                     }
                                 }
 
