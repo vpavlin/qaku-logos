@@ -58,7 +58,7 @@ static std::string roleFor(const std::vector<qaku::Event>& log, const std::strin
     return "guest";
 }
 
-QakuCoreImpl::~QakuCoreImpl() { if (m_hubTimer) { m_hubTimer->stop(); m_hubTimer->deleteLater(); m_hubTimer = nullptr; } }
+QakuCoreImpl::~QakuCoreImpl() { m_overlay.reset(); if (m_hubTimer) { m_hubTimer->stop(); m_hubTimer->deleteLater(); m_hubTimer = nullptr; } }
 
 // ---- session registry ------------------------------------------------------
 QakuCoreImpl::Session& QakuCoreImpl::cur() { return m_sessions[m_current]; }
@@ -184,6 +184,7 @@ void QakuCoreImpl::loadSessions() {
             m_order.push_back(e.id);
             applySecret(s, secret, false);        // derive identity/topic (key already on disk)
             loadPersistedLog(s);
+            loadOnStream(s);
         }
         if (!r.current.empty() && m_sessions.count(r.current)) m_current = r.current;
     }
@@ -226,6 +227,8 @@ void QakuCoreImpl::onContextReady() {
     loadSessions();
     loadUnpublished();   // restore the "queued" set so a not-yet-published question survives restart
     setStatus("Ready");
+    loadOverlayConfig();
+    applyOverlayConfig();   // no-op unless the user enabled it; default is OFF
     bootstrapDelivery();
     // Headless hub self-drive: a QTimer on the event-loop thread (NEVER a
     // std::thread - the delivery async callbacks only dispatch on this thread, so
@@ -310,13 +313,210 @@ void QakuCoreImpl::pushEvent(Session& s, Event e, bool broadcast) {
     publishState();
 }
 
+// ---------------------------------------------------------------------------
+// OBS overlay
+// ---------------------------------------------------------------------------
+
+// The host's stream selection, per session, in <sessionDir>/onstream.json. Local
+// only - see the note on Session::onStream for why this is not an event.
+void QakuCoreImpl::loadOnStream(Session& s) {
+    s.onStream.clear();
+    if (s.dir.empty()) return;
+    std::ifstream f(s.dir + "/onstream.json");
+    if (!f) return;
+    try {
+        std::stringstream ss; ss << f.rdbuf();
+        json a = json::parse(ss.str());
+        if (a.is_array()) for (const auto& v : a) if (v.is_string()) s.onStream.insert(v.get<std::string>());
+    } catch (const std::exception&) { /* corrupt = empty selection, never fatal */ }
+}
+
+void QakuCoreImpl::saveOnStream(Session& s) {
+    if (s.dir.empty()) return;
+    std::ofstream f(s.dir + "/onstream.json");
+    if (!f) return;
+    json a = json::array();
+    for (const auto& id : s.onStream) a.push_back(id);
+    f << a.dump();
+}
+
+std::string QakuCoreImpl::setOnStream(std::string questionId, std::string on) {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    if (questionId.empty()) return std::string("{\"error\":\"questionId required\"}");
+    Session& s = cur();
+    if (on != "false") s.onStream.insert(questionId); else s.onStream.erase(questionId);
+    saveOnStream(s);
+    publishState();
+    return snapshot();
+}
+
+std::string QakuCoreImpl::clearOnStream() {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    Session& s = cur();
+    s.onStream.clear();
+    saveOnStream(s);
+    publishState();
+    return snapshot();
+}
+
+// The overlay's view of the world. This is deliberately a SEPARATE projection
+// from publishState(): the snapshot carries `secret` and `shareUri` (the pairing
+// code - anyone holding it can write to the Q&A), and the overlay port is
+// unauthenticated because an OBS Browser Source cannot send a bearer token.
+// Nothing identifying and nothing secret goes over the wire: authors are resolved
+// to display names here, so raw signing addresses never leave the module either.
+std::string QakuCoreImpl::overlayPayload() {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    try {
+    json st = qaku::computeState(cur().log);
+
+    // nlohmann's value(key, default) falls back only when the key is MISSING; a key
+    // present but null throws type_error.302. The engine emits real nulls
+    // (acceptedAnswerId is json(nullptr) whenever nothing is accepted - i.e. most
+    // questions, and session/description are absent until set), so every read here
+    // goes through these instead. Reading them directly crashed the module.
+    auto jstr = [](const json& o, const char* k) -> std::string {
+        auto it = o.find(k);
+        if (it == o.end() || !it->is_string()) return std::string();
+        return it->get<std::string>();
+    };
+    auto jnum = [](const json& o, const char* k) -> long long {
+        auto it = o.find(k);
+        if (it == o.end() || !it->is_number()) return 0;
+        return it->get<long long>();
+    };
+    auto jbool = [](const json& o, const char* k, bool dflt) -> bool {
+        auto it = o.find(k);
+        if (it == o.end() || !it->is_boolean()) return dflt;
+        return it->get<bool>();
+    };
+
+    const json& names = st["names"];
+    auto nameOf = [&](const std::string& addr) -> std::string {
+        if (addr.empty()) return "anon";
+        if (names.is_object()) { auto it = names.find(addr); if (it != names.end() && it->is_string()) return it->get<std::string>(); }
+        if (addr.size() > 10) return addr.substr(0, 6) + "\xe2\x80\xa6" + addr.substr(addr.size() - 4);
+        return addr;
+    };
+
+    json out;
+    out["rev"] = m_rev;
+    if (st["session"].is_object()) {
+        const json& sess = st["session"];
+        std::string t = jstr(sess, "title");
+        out["title"] = t.empty() ? std::string("QAKU") : t;
+        out["description"] = jstr(sess, "description");
+        out["open"] = jbool(sess, "enabled", true);
+    } else {
+        out["title"] = "QAKU"; out["description"] = ""; out["open"] = true;
+    }
+
+    // Already sorted upvotes desc / ts asc / id by the engine - render order is
+    // the fold's order, so the overlay agrees with the desktop view by construction.
+    json qs = json::array();
+    if (st["questions"].is_array()) {
+        for (const auto& q : st["questions"]) {
+            // Hidden questions stay hidden. The existing Hide button is therefore
+            // also the overlay's kill switch - there is no second moderation path.
+            if (jbool(q, "moderated", false)) continue;
+            // The host picks what goes on the stream; nothing appears by itself.
+            if (!cur().onStream.count(jstr(q, "id"))) continue;
+            json answers = json::array();
+            if (q["answers"].is_array())
+                for (const auto& a : q["answers"])
+                    answers.push_back({ {"content", jstr(a, "content")},
+                                        {"author", nameOf(jstr(a, "author"))},
+                                        {"accepted", jbool(a, "accepted", false)} });
+            qs.push_back({
+                {"id", jstr(q, "id")},
+                {"content", jstr(q, "content")},
+                {"author", nameOf(jstr(q, "author"))},
+                {"ts", jnum(q, "ts")},
+                {"upvotes", jnum(q, "upvotes")},
+                {"answered", !answers.empty() || !jstr(q, "acceptedAnswerId").empty()},
+                {"answers", answers}
+            });
+        }
+    }
+    out["questions"] = qs;
+    out["questionCount"] = (json::number_integer_t)qs.size();
+    return out.dump();
+    } catch (const std::exception& e) {
+        // The overlay is a read-only convenience. It must never be able to take the
+        // module down with it - an uncaught throw here is a crash of qaku_core, and
+        // with it the whole Q&A session, for the sake of a stream graphic.
+        json err;
+        err["rev"] = m_rev;
+        err["title"] = "QAKU";
+        err["questions"] = json::array();
+        err["questionCount"] = 0;
+        err["error"] = e.what();
+        return err.dump();
+    }
+}
+
+void QakuCoreImpl::loadOverlayConfig() {
+    if (m_dataDir.empty()) return;
+    std::ifstream f(m_dataDir + "/overlay.json");
+    if (!f) return;
+    try {
+        std::stringstream ss; ss << f.rdbuf();
+        json c = json::parse(ss.str());
+        m_overlayEnabled = c.value("enabled", false);
+        int p = c.value("port", 7337);
+        if (p > 0 && p < 65536) m_overlayPort = (unsigned short)p;
+    } catch (const std::exception&) { /* corrupt config = defaults, never a failed start */ }
+}
+
+void QakuCoreImpl::saveOverlayConfig() {
+    if (m_dataDir.empty()) return;
+    std::ofstream f(m_dataDir + "/overlay.json");
+    if (!f) return;
+    f << json({{"enabled", m_overlayEnabled}, {"port", (int)m_overlayPort}}).dump();
+}
+
+void QakuCoreImpl::applyOverlayConfig() {
+    m_overlayError.clear();
+    if (!m_overlayEnabled) { m_overlay.reset(); return; }
+    if (!m_overlay) m_overlay = std::unique_ptr<OverlayServer>(new OverlayServer([this] { return overlayPayload(); }));
+    if (m_overlay->running() && m_overlay->port() == m_overlayPort) return;
+    // A bind failure is REPORTED, not worked around. Basecamp can run more than
+    // one qaku_core against the same data dir, so the port can genuinely be taken;
+    // silently falling back to an ephemeral port would break the URL already
+    // pasted into OBS and look like the overlay had simply stopped working.
+    if (!m_overlay->start(m_overlayPort)) {
+        m_overlayError = m_overlay->lastError().empty() ? std::string("could not bind port") : m_overlay->lastError();
+    }
+}
+
+std::string QakuCoreImpl::setOverlay(std::string patchJson) {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    try {
+        json p = json::parse(patchJson);
+        if (p.contains("enabled")) m_overlayEnabled = p["enabled"].is_string() ? (p["enabled"] == "true") : p.value("enabled", false);
+        if (p.contains("port")) {
+            int v = p["port"].is_string() ? std::atoi(p["port"].get<std::string>().c_str()) : p.value("port", 0);
+            if (v <= 0 || v >= 65536) return std::string("{\"error\":\"port must be 1-65535\"}");
+            m_overlayPort = (unsigned short)v;
+        }
+    } catch (const std::exception& e) { return std::string("{\"error\":\"") + e.what() + "\"}"; }
+    saveOverlayConfig();
+    applyOverlayConfig();
+    publishState();
+    return snapshot();
+}
+
 void QakuCoreImpl::publishState() {
     // Current session detail (the main pane renders these top-level fields).
     json s = qaku::computeState(cur().log);
     // Tag each question with its local send state so the view can show a "queued" badge on
     // our own not-yet-published questions (evId = the source event id; see qaku_engine).
     if (s.contains("questions") && s["questions"].is_array())
-        for (auto& q : s["questions"]) q["queued"] = m_unpublished.count(q.value("evId", "")) > 0;
+        for (auto& q : s["questions"]) {
+            q["queued"] = m_unpublished.count(q.value("evId", "")) > 0;
+            // Whether this question is currently on the OBS overlay.
+            q["onStream"] = cur().onStream.count(q.value("id", std::string())) > 0;
+        }
     s["status"] = m_status;
     s["fingerprint"] = cur().haveKey ? cur().fingerprint : "";
     // The raw session secret as hex: THIS is the pairing code, meant to be shared
@@ -358,6 +558,11 @@ void QakuCoreImpl::publishState() {
         });
     }
     s["sessions"] = sessions;
+    ++m_rev;
+    // What the sidebar renders. `url` is what the user pastes into OBS.
+    s["overlay"] = { {"enabled", m_overlayEnabled}, {"port", (int)m_overlayPort},
+                     {"url", std::string("http://127.0.0.1:") + std::to_string((int)m_overlayPort) + "/"},
+                     {"error", m_overlayError} };
     s["sync"] = { {"rxRaw", m_rxRaw}, {"rxSeen", m_rxSeen}, {"rxOpened", m_rxOpened},
                   {"rxOpenFail", m_rxOpenFail}, {"rxNew", m_rxNew}, {"rxDup", m_rxDup}, {"txTotal", m_txTotal} };
     m_snapshot = s.dump();

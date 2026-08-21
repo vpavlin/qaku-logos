@@ -173,6 +173,14 @@ Item {
     property bool shareOpen: false     // the Share card is collapsed by default (declutter)
     property bool showDiag: false      // the SYNC/TRANSPORT diagnostics are hidden by default
     property bool hiddenOpen: false
+    readonly property int onStreamCount: {
+        var n = 0, qs = root.st.questions || [];
+        for (var i = 0; i < qs.length; i++) if (qs[i].onStream && !qs[i].moderated) n++;
+        return n;
+    }
+    readonly property bool overlayOn: (root.st.overlay && root.st.overlay.enabled) ? true : false
+    readonly property string overlayErr: (root.st.overlay && root.st.overlay.error) ? String(root.st.overlay.error) : ""
+
     function answeredOf(q) { return (q.answers && q.answers.length > 0) || (q.acceptedAnswerId ? true : false); }
     readonly property var visibleQuestions: {
         var qs = root.questions.filter(function (x) { return !x.moderated; });
@@ -474,6 +482,118 @@ Item {
                             implicitWidth: 64; implicitHeight: 30
                             onClicked: { clip.text = root.st.address || root.st.deviceId || ""; clip.selectAll(); clip.copy(); root.toast("Identity address copied"); }
                         }
+                    }
+
+                    // ---- OBS stream overlay ----
+                    // qaku_core serves a transparent HTML page on loopback; point an OBS
+                    // Browser Source at the URL below. The overlay mirrors the question
+                    // list automatically, and honors Hide — hiding a question here removes
+                    // it from the stream too.
+                    Item { Layout.preferredHeight: Theme.spacing.tiny }
+                    LogosText {
+                        text: "STREAM OVERLAY"
+                        color: Theme.palette.textTertiary
+                        font.pixelSize: Theme.typography.badgeText
+                        font.weight: Theme.typography.weightMedium
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.spacing.small
+                        // A chip, not a CheckBox/Switch: only LogosText/LogosButton load
+                        // reliably across Basecamp versions (see the constraints at the top
+                        // of this file), so this copies the sort/filter chip pattern.
+                        Rectangle {
+                            id: ovlChip
+                            implicitWidth: 52; implicitHeight: 26
+                            radius: 4
+                            color: root.overlayOn ? root.qkGold : root.qkSurface2
+                            border.width: 1
+                            border.color: root.overlayOn ? root.qkGold : root.qkBorder
+                            LogosText {
+                                anchors.centerIn: parent
+                                text: root.overlayOn ? "ON" : "OFF"
+                                color: root.overlayOn ? root.qkBg : root.qkMuted
+                                font.pixelSize: Theme.typography.badgeText
+                                font.weight: Theme.typography.weightMedium
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.act("setOverlay",
+                                                    [JSON.stringify({ enabled: !root.overlayOn,
+                                                                      port: parseInt(ovlPort.text) || 7337 })],
+                                                    "Could not toggle the overlay")
+                            }
+                        }
+                        AppField {
+                            id: ovlPort
+                            Layout.preferredWidth: 66
+                            text: String((root.st.overlay && root.st.overlay.port) || 7337)
+                            inputMethodHints: Qt.ImhDigitsOnly
+                        }
+                        LogosButton {
+                            text: "Save"
+                            implicitWidth: 56; implicitHeight: 30
+                            enabled: ovlPort.text !== String((root.st.overlay && root.st.overlay.port) || 7337)
+                            onClicked: root.act("setOverlay",
+                                                [JSON.stringify({ enabled: root.overlayOn,
+                                                                  port: parseInt(ovlPort.text) || 7337 })],
+                                                "Could not set the overlay port")
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.spacing.small
+                        visible: root.overlayOn && !root.overlayErr
+                        LogosText {
+                            Layout.fillWidth: true
+                            text: (root.st.overlay && root.st.overlay.url) || ""
+                            color: root.qkTeal
+                            font.pixelSize: Theme.typography.badgeText
+                            font.family: "monospace"
+                            wrapMode: Text.WrapAnywhere
+                        }
+                        LogosButton {
+                            text: "Copy"
+                            implicitWidth: 64; implicitHeight: 30
+                            onClicked: { clip.text = (root.st.overlay && root.st.overlay.url) || ""; clip.selectAll(); clip.copy(); root.toast("Overlay URL copied - paste into an OBS Browser Source"); }
+                        }
+                    }
+                    LogosText {
+                        Layout.fillWidth: true
+                        visible: root.overlayErr !== ""
+                        text: "Overlay: " + root.overlayErr
+                        color: Theme.palette.error
+                        font.pixelSize: Theme.typography.badgeText
+                        wrapMode: Text.WordWrap
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.spacing.small
+                        visible: root.overlayOn && !root.overlayErr
+                        LogosText {
+                            Layout.fillWidth: true
+                            text: root.onStreamCount === 0
+                                  ? "Nothing on stream - overlay is blank"
+                                  : root.onStreamCount + (root.onStreamCount === 1 ? " question on stream" : " questions on stream")
+                            color: root.onStreamCount === 0 ? root.qkMuted : root.qkGold
+                            font.pixelSize: Theme.typography.badgeText
+                            wrapMode: Text.WordWrap
+                        }
+                        LogosButton {
+                            text: "Clear"
+                            implicitWidth: 60; implicitHeight: 30
+                            enabled: root.onStreamCount > 0
+                            onClicked: root.act("clearOnStream", [], "Could not clear the stream selection")
+                        }
+                    }
+                    LogosText {
+                        Layout.fillWidth: true
+                        visible: root.overlayOn && !root.overlayErr
+                        text: "Pick questions with + STREAM. Browser Source in OBS, 420x1080."
+                        color: root.qkMuted
+                        font.pixelSize: Theme.typography.badgeText
+                        wrapMode: Text.WordWrap
                     }
                 }
 
@@ -919,6 +1039,35 @@ Item {
                                         LogosText { text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; opacity: 0.85 }
                                         // Our own question not yet dispatched to the network (see qaku_core m_unpublished).
                                         LogosText { visible: !!modelData.queued; text: "·  ⏳ queued"; color: root.qkGold; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightBold }
+                                        Item { Layout.preferredWidth: Theme.spacing.tiny; visible: root.overlayOn }
+                                        // Stream overlay pick. Only shown while the overlay is running - it is
+                                        // meaningless otherwise, and the row is already busy. A Rectangle +
+                                        // MouseArea like the sort/filter chips; CheckBox/Switch do not load
+                                        // reliably across Basecamp versions (see the notes at the top).
+                                        Rectangle {
+                                            visible: root.overlayOn
+                                            implicitWidth: streamLbl.implicitWidth + 14
+                                            implicitHeight: 20
+                                            radius: 10
+                                            color: modelData.onStream ? root.qkGold : "transparent"
+                                            border.width: 1
+                                            border.color: modelData.onStream ? root.qkGold : root.qkBorder
+                                            LogosText {
+                                                id: streamLbl
+                                                anchors.centerIn: parent
+                                                text: modelData.onStream ? "● ON STREAM" : "+ STREAM"
+                                                color: modelData.onStream ? root.qkBg : root.qkMuted
+                                                font.pixelSize: Theme.typography.badgeText
+                                                font.weight: Theme.typography.weightMedium
+                                            }
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.act("setOnStream",
+                                                                    [modelData.id, modelData.onStream ? "false" : "true"],
+                                                                    "Could not change the stream selection")
+                                            }
+                                        }
                                     }
                                 }
 
