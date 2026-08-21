@@ -175,7 +175,7 @@ Item {
     property bool hiddenOpen: false
     readonly property int onStreamCount: {
         var n = 0, qs = root.st.questions || [];
-        for (var i = 0; i < qs.length; i++) if (qs[i].onStream) n++;
+        for (var i = 0; i < qs.length; i++) if (qs[i].onStream && !qs[i].moderated) n++;
         return n;
     }
     readonly property bool overlayOn: (root.st.overlay && root.st.overlay.enabled) ? true : false
