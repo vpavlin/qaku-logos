@@ -63,6 +63,16 @@ inline std::string topicFor(const Identity& id, int epoch=0) {
     return std::string("/qaku/1/") + toHex(t.data(), 16) + "/proto";
 }
 
+// Deterministic 12-byte nonce from a seal id (ADR 0011). Byte-identical to loam-sync
+// crypto.hpp nonceFor(), packages/sync and the phone: pass an immutable event's id so a
+// re-seal is byte-identical and the fleet store dedups it (fixes store bloat + cold-start
+// truncation). Ephemeral control frames keep a random nonce (a fresh send is never collapsed).
+inline Bytes nonceFor(const Identity& id, const std::string& eventId) {
+    Bytes n = hmacSha256(id.Ke, std::string("qaku/nonce/v1|") + eventId);
+    n.resize(12);
+    return n;
+}
+
 // Autoshard (RFC 51 gen-0) for a content topic "/app/version/name/enc": the pubsub
 // shard the fleet actually routes on. shard = uint64BE(sha256(app||version)[24..32])
 // % count. logos.dev cluster 2 has 8 shards. mobile + desktop derive the same topic
@@ -80,9 +90,10 @@ inline int shardFor(const std::string& contentTopic, int count = 8) {
     return (int)(val % (uint64_t)count);
 }
 
-// seal -> nonce(12) || ciphertext || tag(16)
-inline Bytes seal(const Identity& id, const Bytes& plaintext, const std::string& topic) {
-    Bytes nonce(12); RAND_bytes(nonce.data(), 12);
+// seal -> nonce(12) || ciphertext || tag(16). Deterministic nonce derived from eventId
+// (ADR 0011): re-sealing the same immutable event is byte-identical → the store dedups it.
+inline Bytes seal(const Identity& id, const std::string& eventId, const Bytes& plaintext, const std::string& topic) {
+    Bytes nonce = nonceFor(id, eventId);
     EVP_CIPHER_CTX* c = EVP_CIPHER_CTX_new();
     EVP_EncryptInit_ex(c, EVP_chacha20_poly1305(), nullptr, nullptr, nullptr);
     EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_AEAD_SET_IVLEN, 12, nullptr);

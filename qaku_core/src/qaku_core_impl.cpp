@@ -858,7 +858,7 @@ void QakuCoreImpl::joinTransport(Session& s) {
 void QakuCoreImpl::sealAndSend(Session& s, const Event& e) {
     if (!s.haveKey || !m_nodeReady) return;   // not connected → our own event stays "queued"
     std::string plain = qaku::encodeEvent(e);
-    qaku::Bytes sealed = qaku::seal(s.identity, qaku::Bytes(plain.begin(), plain.end()), s.topic);
+    qaku::Bytes sealed = qaku::seal(s.identity, e.id, qaku::Bytes(plain.begin(), plain.end()), s.topic);
     bool dispatched = deliverySend(s.topic, b64(sealed));
     // Handed to the reliable channel while connected → clear "queued" (only affects our own
     // authored events; received/reseeded ids aren't in the set). All synchronous on the Qt
