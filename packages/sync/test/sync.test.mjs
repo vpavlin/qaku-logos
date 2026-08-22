@@ -10,7 +10,7 @@ test("seal/open round-trips with the right key; a wrong key throws", () => {
   const id = deriveIdentity(newSecret());
   const topic = topicFor(id);
   const pt = new TextEncoder().encode("hello qaku");
-  const sealed = seal(id, pt, topic);
+  const sealed = seal(id, "test-seal", pt, topic);
   assert.deepEqual(open(id, sealed, topic), pt);
 
   const other = deriveIdentity(newSecret());
