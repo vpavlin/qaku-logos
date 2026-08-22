@@ -38,7 +38,28 @@ export function topicFor(id: Identity, epoch = 0): string {
   return `/qaku/1/${hex(t)}/proto`;
 }
 
-export function seal(id: Identity, plaintext: Uint8Array, topic: string, nonce = randomBytes(12)): Uint8Array {
+/**
+ * Deterministic 12-byte nonce from the seal id (ADR 0011, byte-identical to loam-sync
+ * nonceFor + qaku_core C++ + packages/sync). Same id → same nonce → same ciphertext, so
+ * re-sealing an immutable event is byte-identical and the fleet store dedups it (fixes
+ * store bloat + cold-start truncation). Pass a fresh token for an ephemeral control frame.
+ */
+export function nonceFor(id: Identity, sealId: string): Uint8Array {
+  return hmac(sha256, id.Ke, enc(`qaku/nonce/v1|${sealId}`)).slice(0, 12);
+}
+
+/** A short random hex token — seeds the deterministic nonce for ephemeral control frames. */
+export function randToken(): string {
+  return hex(randomBytes(8));
+}
+
+/**
+ * Encrypt: nonce(12) || ChaCha20-Poly1305 ciphertext||tag, AAD-bound to the topic. The
+ * nonce is DERIVED from `sealId` (deterministic): pass the event id for an immutable event
+ * so a re-seal is byte-identical (store dedups); a fresh token for a control frame.
+ */
+export function seal(id: Identity, sealId: string, plaintext: Uint8Array, topic: string): Uint8Array {
+  const nonce = nonceFor(id, sealId);
   const ct = chacha20poly1305(id.Ke, nonce, enc(topic)).encrypt(plaintext);
   const out = new Uint8Array(nonce.length + ct.length);
   out.set(nonce, 0); out.set(ct, nonce.length);

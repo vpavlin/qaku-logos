@@ -4,7 +4,7 @@
 // multi-budget: a registry of joined rooms, per-room fold, and authoring that SIGNS with
 // this device's key (verifiable author) and SEALS with the room's household key.
 import * as transport from "./loam-transport";
-import { deriveIdentity, topicFor, seal, open, newSecret, Identity as SealId } from "./crypto";
+import { deriveIdentity, topicFor, seal, open, newSecret, randToken as randSealToken, Identity as SealId } from "./crypto";
 import { encodeEvent } from "./wire";
 import { utf8Bytes, utf8Decode } from "./utf8";
 import { getDeviceId } from "./device";
@@ -247,7 +247,14 @@ export class Sessions {
   }
 
   private async publish(room: Room, envObj: any) {
-    const sealed = seal(room.sealId, utf8Bytes(JSON.stringify(envObj)), room.topic);
+    // Deterministic nonce keyed on the immutable event id (ADR 0011) → re-sealing an event
+    // is byte-identical, so the fleet store dedups retransmits. Ephemeral control frames
+    // (SYNC_REQ) get a fresh per-send token so a new catch-up request is never collapsed.
+    const sealId =
+      envObj?.type === "EVENT" && envObj?.event?.id
+        ? String(envObj.event.id)
+        : `${envObj?.type ?? "ctrl"}|${this.deviceId}|${randSealToken()}`;
+    const sealed = seal(room.sealId, sealId, utf8Bytes(JSON.stringify(envObj)), room.topic);
     await transport.publishSealed(room.topic, sealed);
   }
   private async sendSyncReq(room: Room) {
