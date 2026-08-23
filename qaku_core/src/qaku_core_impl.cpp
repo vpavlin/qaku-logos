@@ -1,7 +1,8 @@
 // QakuCoreImpl implementation. The engine/crypto/wire are the std-only headers
 // (qaku_engine.hpp etc., byte-parity with the JS reference). This file wires the
-// multi-session mutation API + the delivery_module transport (SDS Reliable
-// Channels), routing incoming messages to the session that owns the topic.
+// multi-session mutation API + the loam_core transport facade (which owns the
+// delivery node + SDS Reliable Channels, and future ble_mesh), routing incoming
+// messages to the session that owns the topic.
 //
 // Every delivery call is async / fire-and-forget (a synchronous send on the
 // event-loop thread freezes the module on the IPC timeout).
@@ -27,12 +28,7 @@ static qaku::Bytes fromHex(const std::string& s){ qaku::Bytes b; for (size_t i=0
 // Minimal base64 (the FFI wants base64 at the channelSend boundary).
 static const char* kB64T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static std::string b64(const qaku::Bytes& in){ std::string o; int val=0,bits=-6; for(uint8_t c:in){val=(val<<8)+c;bits+=8;while(bits>=0){o+=kB64T[(val>>bits)&0x3F];bits-=6;}} if(bits>-6)o+=kB64T[((val<<8)>>(bits+8))&0x3F]; while(o.size()%4)o+='='; return o; }
-static std::string b64s(const std::string& in){ return b64(qaku::Bytes(in.begin(), in.end())); }
 static std::string b64decode(const std::string& in){ std::vector<int> T(256,-1); for(int i=0;i<64;i++) T[(unsigned char)kB64T[i]]=i; std::string o; int val=0,bits=-8; for(unsigned char c:in){ if(T[c]==-1) break; val=(val<<6)+T[c]; bits+=6; if(bits>=0){ o.push_back(char((val>>bits)&0xFF)); bits-=8; } } return o; }
-// The delivery send() payload must be a JSON byte ARRAY under the current cpp-sdk
-// (a JSON string throws "type must be array, but is string" in the marshaling);
-// this produces the same wire bytes. deliverySend probes array vs string.
-static LogosMap bytesPayload(const std::string& s){ LogosMap a = LogosMap::array(); for (unsigned char c : s) a.push_back((unsigned)c); return a; }
 
 // A 64-hex string is a valid session secret (32 bytes).
 static bool isHex64(const std::string& s){ if (s.size()!=64) return false; for (char c : s) { if (!((c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F'))) return false; } return true; }
@@ -757,33 +753,42 @@ void QakuCoreImpl::bootstrapDelivery() {
     bool anyKey = false; for (auto& kv : m_sessions) if (kv.second.haveKey) { anyKey = true; break; }
     if (!anyKey || m_nodeReady || m_deliveryStarting) return;
     m_deliveryStarting = true;
-    // Register the receive handlers BEFORE createNode. BOTH the raw relay path and
-    // the SDS reliable-channel path are registered; only the transport we actually
-    // joined delivers. Each extracts the base64 payload, routes by content topic.
-    auto toWire = [](const LogosMap& v) -> std::string {
-        if (v.is_string()) return v.get<std::string>();
-        if (v.is_array()) { std::string s; s.reserve(v.size()); for (const auto& c : v) if (c.is_number_integer()) s.push_back((char)c.get<int>()); return s; }
-        if (v.is_object() && v.contains("_bytes") && v["_bytes"].is_string()) return v["_bytes"].get<std::string>();
-        return std::string();
-    };
-    // The SDS reliable-channel path (onChannelMessageReceived) is AUTHORITATIVE:
-    // it hands us the UNWRAPPED payload. The raw relay path (onMessageReceived)
-    // fires too, but for a channel message its payload is the SDS wire FRAME (~19KB
-    // of causal history/bloom), which never AEAD-opens. Ingesting it only inflated
-    // rxOpenFail with benign noise. So relay ingestion is best-effort + SILENT on
-    // failure (channelActive=false); the channel path counts a real rxOpenFail.
-    modules().delivery_module.onMessageReceived(
-        [this, toWire](const std::string&, const std::string& contentTopic, const LogosMap& payload, int64_t) {
-            std::string p = toWire(payload);
-            if (p.empty() && payload.is_object() && payload.contains("payload")) p = toWire(payload["payload"]);
-            if (!p.empty()) ingestPayload(contentTopic, p, /*channelPath=*/false);
+    // Receive + readiness via the loam_core FACADE. loam_core owns the delivery node +
+    // bearer(s), dedups across them, and hands us the payload as base64 of the ONCE-decoded
+    // sealed bytes — i.e. loam_core's delivery_bearer already peeled delivery's outer wire
+    // layer AND re-encoded, so payloadB64 here is byte-identical to what qaku's OLD toWire()
+    // produced on the channel path (base64 of the sealed bytes). We therefore feed payloadB64
+    // STRAIGHT into ingestPayload, which keeps doing its own double/single peel (mobile may
+    // single- or double-encode). The two old receive paths (raw relay + SDS channel) collapse
+    // into this one; loam_core is the authoritative channel path (channelPath=true).
+    // (The delivery payload-shape variance — string / byte-array / {_bytes} — is now
+    // loam_core's concern, not ours.)
+    if (!m_loamWired) {
+        m_loamWired = true;
+        modules().loam_core.onReceived(
+            [this](const std::string& topic, const std::string&, const std::string& payloadB64, int64_t) {
+                if (!payloadB64.empty()) ingestPayload(topic, payloadB64, /*channelPath=*/true);
+            });
+        // Readiness: loam_core.start() returns early (async node bringup), so we learn the
+        // node is actually up via statusChanged("Connected"). That's where we mark ready,
+        // join every session's topic, and seed — replacing the old createNode→start success
+        // callback.
+        modules().loam_core.onStatusChanged([this](const std::string& s) {
+            if (s != "Connected" || m_nodeReady) return;
+            std::lock_guard<std::recursive_mutex> lk(m_mtx);
+            try {
+                m_nodeReady = true;
+                joinAllTransports();
+                setStatus("Connected - " + std::to_string(m_order.size()) + " session(s)");
+                // Seed the log ONCE on node-up. A joining peer pulls reliably via SYNC_REQ, so
+                // a single seed is enough; the periodic resync (rate-limited) is the safety net.
+                for (auto& kv : m_sessions) if (kv.second.haveKey) for (auto& e : kv.second.log) sealAndSend(kv.second, e);
+                publishState();
+            } catch (const std::exception& ex) {
+                fprintf(stderr, "QAKUDBG ready EXCEPTION: %s\n", ex.what());
+            } catch (...) { fprintf(stderr, "QAKUDBG ready EXCEPTION (unknown)\n"); }
         });
-    modules().delivery_module.onChannelMessageReceived(
-        [this, toWire](const std::string& channelId, const std::string&, const LogosMap& payload, int64_t) {
-            std::string p = toWire(payload);
-            if (p.empty() && payload.is_object() && payload.contains("payload")) p = toWire(payload["payload"]);
-            if (!p.empty()) ingestPayload(channelId, p, /*channelPath=*/true);
-        });
+    }
     setStatus("Connecting...");
     // RELAY node with the logos.test fleet entry nodes PINNED. Bare
     // {mode:Core,preset:...} gives ZERO bootstrap nodes ("seed node, no bootstrap") —
@@ -814,32 +819,23 @@ void QakuCoreImpl::bootstrapDelivery() {
         auto j = json::parse(ov, nullptr, false);
         if (j.is_object()) for (auto it = j.begin(); it != j.end(); ++it) cfg[it.key()] = it.value();
     }
+    // loam-only flags loam_core strips from the node cfg before forwarding the rest to the
+    // delivery node verbatim: qaku always rides SDS Reliable Channels (useChannels=true), and
+    // hubMode makes loam_core delay createNode by 1500ms so our onReceived handler IPC lands
+    // before the node comes up (the headless "register handlers first" gap) — replacing qaku's
+    // old QAKU_HUB QTimer::singleShot(1500) here.
+    cfg["useChannels"] = true;
+    cfg["hubMode"] = (std::getenv("QAKU_HUB") != nullptr);
     std::string cfgStr = cfg.dump();
     fprintf(stderr, "QAKU bootstrapDelivery cfg=%s\n", cfgStr.c_str());
-    auto startNode = [this, cfgStr]() {
-        modules().delivery_module.createNodeAsync(cfgStr, [this](StdLogosResult r) {
-            if (!r.success) { m_deliveryStarting = false; setStatus("Delivery error (createNode): " + r.error); return; }
-            modules().delivery_module.startAsync([this](StdLogosResult r2) {
-                if (!r2.success) { m_deliveryStarting = false; setStatus("Delivery error (start): " + r2.error); return; }
-                std::lock_guard<std::recursive_mutex> lk(m_mtx);
-                m_nodeReady = true;
-                joinAllTransports();
-                setStatus("Connected - " + std::to_string(m_order.size()) + " session(s)");
-                // Seed every session's log for peers already listening. The logos.dev
-                // relay mesh on our shard is sparse and one-shot publishes get dropped,
-                // so re-broadcast the whole log a FEW times over the first ~12s (KYM's
-                // seed-burst fix). Idempotent — peers dedup by id. Timers fire on the Qt
-                // thread; joinTransport must have run first (subscribe+channelCreate).
-                // Seed the log ONCE on node-up (was a 3x burst — an amplifier). A
-                // joining peer pulls reliably via SYNC_REQ, so a single seed is enough;
-                // the periodic resync (rate-limited to 60s) is the slow safety net.
-                for (auto& kv : m_sessions) if (kv.second.haveKey) for (auto& e : kv.second.log) sealAndSend(kv.second, e);
-                publishState();
-            });
-        });
-    };
-    if (std::getenv("QAKU_HUB")) QTimer::singleShot(1500, startNode);
-    else startNode();
+    // Route the node through the loam_core FACADE. One start() owns createNode+start (and the
+    // hubMode delay); node READINESS arrives via the onStatusChanged("Connected") handler
+    // wired above, not from these callbacks. setSenderId first so channelCreate uses our SDS
+    // id. Both are fire-and-forget: loam_core methods return a status string ("" ok / error).
+    modules().loam_core.setSenderIdAsync(m_deviceId, [](std::string) {});
+    modules().loam_core.startAsync(cfgStr, [](std::string err) {
+        if (!err.empty()) fprintf(stderr, "QAKUDBG loam_core.start returned: %s\n", err.c_str());
+    });
 }
 
 void QakuCoreImpl::joinAllTransports() {
@@ -847,11 +843,10 @@ void QakuCoreImpl::joinAllTransports() {
 }
 void QakuCoreImpl::joinTransport(Session& s) {
     if (!s.haveKey || !m_nodeReady || s.subscribed) return;
-    // SDS Reliable Channels: subscribe THEN channelCreate (channelCreate does not
-    // itself subscribe the content topic; the recv service only emits for
-    // subscribed topics). channelId == contentTopic == the session's derived topic.
-    modules().delivery_module.subscribeAsync(s.topic, [](StdLogosResult){});
-    modules().delivery_module.channelCreateAsync(s.topic, s.topic, m_deviceId, [](StdLogosResult){});
+    // loam_core.join() subscribes the content topic (+ creates the SDS channel with our
+    // senderId when useChannels) — all peers join the one topic/channel. channelId ==
+    // contentTopic == the session's derived topic.
+    modules().loam_core.joinAsync(s.topic, [](std::string){});
     s.subscribed = true;
 }
 
@@ -869,27 +864,15 @@ void QakuCoreImpl::sealAndSend(Session& s, const Event& e) {
 
 bool QakuCoreImpl::deliverySend(const std::string& topic, const std::string& sealedB64) {
     if (!m_nodeReady) return false;
-    // SINGLE-base64, matching KYM's proven kym_core exactly. We hand the transport
-    // the base64 TEXT as bytes (bytesPayload); delivery_module base64-encodes that
-    // once more on the wire, so a peer decodes ONCE to reach our base64 text and a
-    // SECOND time to reach the sealed bytes — the phone's payloadCandidates does
-    // exactly those 1–2 peels. The OLD code added an extra b64s() layer here, so a
-    // desktop/hub message needed THREE peels and the phone could NEVER decode it
-    // (desktop->mobile was dead; desktop<->desktop only worked because both sides
-    // shared the extra layer). Robust to either IPC shape: JSON byte ARRAY (repr 1)
-    // or string (repr 2); probe once, cache m_sendRepr.
-    auto attempt = [&](int repr) -> bool {
-        try {
-            LogosMap p = (repr == 1) ? bytesPayload(sealedB64) : LogosMap(sealedB64);
-            modules().delivery_module.channelSendAsync(topic, p, [](StdLogosResult){});
-            return true;
-        } catch (...) { return false; }
-    };
-    if (m_sendRepr == 1 || m_sendRepr == 2) { if (attempt(m_sendRepr)) return true; m_sendRepr = 0; }
-    if (attempt(1)) { m_sendRepr = 1; return true; }
-    if (attempt(2)) { m_sendRepr = 2; return true; }
-    fprintf(stderr, "QAKUTX deliverySend: no working payload representation\n");
-    return false;
+    // loam_core.sendSealed fans our sealed payload (base64 TEXT of the sealed bytes) to every
+    // bearer and owns the double-b64 wire framing + the array/string payload-representation
+    // probe internally (delivery_bearer). The SINGLE-base64 seam is preserved end-to-end:
+    // loam_core decodes once to the sealed bytes and its delivery_bearer re-encodes + lets
+    // delivery add the outer layer, so a peer still does the same 1–2 peels the phone expects.
+    // Fire-and-forget (async): a sync send would block the event-loop thread on a stalling
+    // lightpush and freeze the module (the "core stuck" bug).
+    modules().loam_core.sendSealedAsync(topic, sealedB64, [](std::string){});
+    return true;
 }
 
 // Persist / restore the "queued" (unpublished) id set. Global (event ids are UUIDs, unique

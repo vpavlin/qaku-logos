@@ -2,14 +2,12 @@
   description = "QAKU engine + sync CORE module (event-log Q&A engine + crypto + delivery); headless hub AND the desktop ui backend.";
 
   inputs = {
-    # Same pinned SDK rev + channel-capable delivery_module as module/flake.nix,
-    # so the hub and the desktop/mobile peers build against ONE SDK (avoids the
-    # cross-module IPC skew documented in the basecamp/mobile skills). This is the
-    # channel-API-capable delivery + the daemon-CLI-compatible builder rev used by
-    # the KYM reference; re-pin to the rev your installed Basecamp was built on.
-    delivery_module.url = "github:logos-co/logos-delivery-module/0fb3a7427b29c98ab0fa2465bcd1e90cbfdf50a3";
-    logos-module-builder.url = "github:logos-co/logos-module-builder/afe4430ee6eb7ba45c08a516a43e18500720c715";
-    delivery_module.inputs.logos-module-builder.follows = "logos-module-builder";
+    # qaku_core now depends on the loam_core FACADE (not delivery_module directly): it moves
+    # sealed bytes through loam_core, which owns the delivery node (+ future ble_mesh). One
+    # module-builder across all of them (loam_core's delivery follows it too) = one SDK ABI.
+    loam_core.url = "github:vpavlin/loam-basecamp?dir=core";
+    logos-module-builder.url = "github:logos-co/logos-module-builder/0.2.6";
+    loam_core.inputs.logos-module-builder.follows = "logos-module-builder";
   };
 
   # mkLogosModule (not mkLogosQmlModule): a headless core module — no QML view,

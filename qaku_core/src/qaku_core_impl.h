@@ -2,7 +2,7 @@
 // QakuCoreImpl - the QAKU engine + sync as a Logos CORE module (universal
 // authoring). It owns one append-only event log PER SESSION, folds each through
 // the shared std-only engine (qaku_engine.hpp), drives all Q&A mutations, and
-// syncs every session over delivery_module using SDS Reliable Channels. It runs
+// syncs every session over the loam_core facade using SDS Reliable Channels. It runs
 // BOTH standalone under logoscore (the always-on hub) AND behind the desktop
 // `qaku` ui_qml view, which calls these methods and renders snapshot() - ONE
 // implementation of the engine/sync, no ui/hub drift.
@@ -161,6 +161,8 @@ private:
     std::string m_current;                       // the selected session's id
     std::string m_dataDir;                       // ROOT (~/.qaku-core); each session at <root>/<id>
     bool m_deliveryStarting = false;
+    // loam_core receive+status handlers are registered once (not per bootstrap retry).
+    bool m_loamWired = false;
 
     std::string m_deviceId = "qaku-core";   // TRANSPORT sender-id (SDS senderId / SYNC_REQ from)
     // Authorship identity — a persisted secp256k1 key; m_myAddress is the "0x…" address
@@ -174,7 +176,6 @@ private:
     std::string m_snapshot = "{}";
     std::string m_status = "Starting...";
     bool m_nodeReady = false;
-    int m_sendRepr = 0;
     // Event ids we AUTHORED but haven't dispatched to the reliable channel yet ("queued").
     // Durable (<dataDir>/unpublished.json). Cleared when sealAndSend hands the event to the
     // channel while connected — desktop delivery exposes no mesh/ACK signal, so "published"
