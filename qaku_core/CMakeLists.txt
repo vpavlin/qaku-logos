@@ -25,6 +25,8 @@ logos_module(
         src/qaku_identity.hpp
         src/qaku_wire_std.hpp
         src/qaku_persist_std.hpp
+        src/logos_sync/event.hpp
+        src/logos_sync/merge.hpp
         src/qrcodegen.hpp
         src/qrcodegen.cpp
         src/overlay_server.h

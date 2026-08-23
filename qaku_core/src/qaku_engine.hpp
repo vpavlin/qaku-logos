@@ -12,18 +12,27 @@
 #include <algorithm>
 #include <nlohmann/json.hpp>
 
+// The event envelope, HLC and CRDT merge now come from the shared logos-sync
+// library (vendored under logos_sync/) — they were already byte-identical to
+// QAKU's hand-written copies (opaque json payload, wall/ctr/dev HLC, union-by-id
+// + HLC-sort merge), so this is a pure de-duplication. What stays QAKU's: the
+// event-type constants, Admission, and the whole Q&A fold below (ADR 0007/0010).
+#include "logos_sync/event.hpp"
+#include "logos_sync/merge.hpp"
+
 namespace qaku {
 using json = nlohmann::json;
 
-struct HLC { long long wall = 0; long long ctr = 0; std::string dev; };
-inline int compareHlc(const HLC& a, const HLC& b) {
-    if (a.wall != b.wall) return a.wall < b.wall ? -1 : 1;
-    if (a.ctr  != b.ctr)  return a.ctr  < b.ctr  ? -1 : 1;
-    if (a.dev  != b.dev)  return a.dev  < b.dev  ? -1 : 1;
-    return 0;
-}
-
-struct Event { int v = 1; std::string id; std::string type; HLC hlc; std::string dev; json payload; std::string pub; std::string sig; };
+// Adopt the shared spine into the qaku:: namespace so the rest of the module keeps
+// compiling unchanged against qaku::Event / qaku::HLC etc. eventToJson/eventFromJson
+// (the on-wire event serialization) now come from logos-sync too — QAKU's envelope
+// wrapper ({v,type:"EVENT",event}) stays in qaku_wire_std.hpp.
+using logos_sync::HLC;
+using logos_sync::compareHlc;
+using logos_sync::Event;
+using logos_sync::eventToJson;
+using logos_sync::eventFromJson;
+using logos_sync::mergeEvents;
 
 // Event type constants - keep in lockstep with contract/src/events.mjs.
 namespace T {
@@ -47,17 +56,8 @@ namespace T {
     constexpr const char* PROFILE_SET    = "profile.set";   // self-scoped display name (participant)
 }
 
-// Union by id, sort by HLC. Idempotent - redelivery is a no-op. Pure.
-inline std::vector<Event> mergeEvents(const std::vector<Event>& a, const std::vector<Event>& b = {}) {
-    std::map<std::string, Event> byId;
-    for (const auto& e : a) byId.emplace(e.id, e);
-    for (const auto& e : b) byId.emplace(e.id, e);
-    std::vector<Event> out;
-    out.reserve(byId.size());
-    for (auto& kv : byId) out.push_back(kv.second);
-    std::sort(out.begin(), out.end(), [](const Event& x, const Event& y){ return compareHlc(x.hlc, y.hlc) < 0; });
-    return out;
-}
+// mergeEvents / compareHlc are now logos_sync::mergeEvents / compareHlc (aliased
+// above) — union-by-id + HLC sort, idempotent, byte-identical to QAKU's original.
 
 struct Admission { std::vector<Event> admitted; std::string owner; std::vector<std::string> admins; bool isSession = false; };
 
