@@ -4,8 +4,11 @@
 // C++ core (qaku_core) must reproduce it exactly. See DESIGN.md.
 
 import { EventType, Role, UpvoteTarget } from "../../contract/src/events.mjs";
-import { compareHlc } from "../../contract/src/hlc.mjs";
 import { verifyEvent } from "../../contract/src/identity.mjs";
+// The CRDT merge (union-by-id + HLC ordering) is now SOURCED FROM loam-sync (single
+// source), imported from the in-tree submodule's dist by RELATIVE path — same union +
+// compareHlc ordering qaku always used. qaku keeps its own fold + event types below.
+import { mergeEvents as LMerge } from "../../loam-sync/dist/merge.js";
 
 // Signature admission. Authored events carry a secp256k1 signature (identity.mjs); the
 // author (hlc.dev) is the signer's address, so admin/creator gating becomes spoof-proof.
@@ -32,11 +35,10 @@ function sigOk(e) {
 /**
  * Merge any number of event logs into one deduped, HLC-ordered array.
  * Union by event id (idempotent — re-delivery is a no-op). Pure.
+ * Folds through loam-sync's mergeEvents (single source); qaku's variadic API preserved.
  */
 export function mergeEvents(...logs) {
-  const byId = new Map();
-  for (const log of logs) for (const e of log) if (!byId.has(e.id)) byId.set(e.id, e);
-  return [...byId.values()].sort((a, b) => compareHlc(a.hlc, b.hlc));
+  return LMerge(...logs);
 }
 
 const ADMIN_EVENTS = new Set([EventType.ADMIN_ADD, EventType.ADMIN_REMOVE]);

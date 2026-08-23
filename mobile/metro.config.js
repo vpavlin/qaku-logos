@@ -42,7 +42,20 @@ config.resolver.nodeModulesPaths = [
 // (2) Intercept the Node core `crypto` import -> Expo-backed shim. The shared
 // contract only needs randomUUID; mobile's own AEAD/topic crypto is @noble.
 const cryptoShim = path.resolve(projectRoot, "shims/crypto.js");
-const EXPLICIT = { "node:crypto": cryptoShim, crypto: cryptoShim };
+
+// loam-sync is an in-tree git submodule under packages/ (Metro-watched), shipped with a
+// built dist so the bare "loam-sync" / "loam-sync/crypto" specifiers bundle as real .js —
+// this is how qaku USES loam-sync (single source) on mobile instead of a vendored copy.
+// (The shared .mjs packages reach loam-sync via relative paths; only mobile/src TS files
+// use the bare specifier, so we alias it here. dist/crypto.js imports @noble subpaths that
+// resolve against mobile's existing @noble/hashes + @noble/ciphers — no version bump.)
+const loamSyncDist = path.resolve(packagesRoot, "loam-sync/dist");
+const EXPLICIT = {
+  "node:crypto": cryptoShim,
+  crypto: cryptoShim,
+  "loam-sync": path.resolve(loamSyncDist, "index.js"),
+  "loam-sync/crypto": path.resolve(loamSyncDist, "crypto.js"),
+};
 
 const defaultResolveRequest = config.resolver.resolveRequest;
 config.resolver.resolveRequest = (context, moduleName, platform) => {
