@@ -290,18 +290,14 @@
         "nix-bundle-lgx": "nix-bundle-lgx"
       },
       "locked": {
-        "lastModified": 1785498464,
-        "narHash": "sha256-6shBduxH/12ph+Y2R1Kwq65rjK6QfZCwp5vBU5h0i5Y=",
-        "owner": "logos-co",
-        "repo": "logos-delivery-module",
-        "rev": "3258cdb0132e37228aa2519e0c01c0e7429a20dd",
-        "type": "github"
+        "lastModified": 1784909306,
+        "narHash": "sha256-xCYrvWnHhXjMhZ5VCnVWLeJUCDP9do6V/mXd3A+mocY=",
+        "path": "/home/vpavlin/kym-hub/sds-build/dm-channels",
+        "type": "path"
       },
       "original": {
-        "owner": "logos-co",
-        "ref": "v0.2.0",
-        "repo": "logos-delivery-module",
-        "type": "github"
+        "path": "/home/vpavlin/kym-hub/sds-build/dm-channels",
+        "type": "path"
       }
     },
     "keycard": {
@@ -359,19 +355,14 @@
         ]
       },
       "locked": {
-        "dir": "core",
-        "lastModified": 1787228394,
-        "narHash": "sha256-OA5bXkF4/wxHAfBCVdZnRHOkbUnsNWGzLXiicB7khPM=",
-        "owner": "vpavlin",
-        "repo": "loam-basecamp",
-        "rev": "2c8d02888544f5832e910f3dec7b366c9c1e8e01",
-        "type": "github"
+        "lastModified": 1787676532,
+        "narHash": "sha256-ec7eq8bGZPCU9PoRqFJPao98FKhykY4CdmHNDXhdoPA=",
+        "path": "/home/vpavlin/loam-basecamp/core",
+        "type": "path"
       },
       "original": {
-        "dir": "core",
-        "owner": "vpavlin",
-        "repo": "loam-basecamp",
-        "type": "github"
+        "path": "/home/vpavlin/loam-basecamp/core",
+        "type": "path"
       }
     },
     "logos-capability-module": {
@@ -3941,11 +3932,11 @@
         "zerokit": "zerokit"
       },
       "locked": {
-        "lastModified": 1785443689,
-        "narHash": "sha256-MHPA2HSHjK6xeo+a1GrDQK80IBMmBShv7W10jZmeykI=",
+        "lastModified": 1784801161,
+        "narHash": "sha256-9CX+nd5MQXu0xQy+HjC8CvrLG2K7RklU0dqbHIeusGU=",
         "ref": "refs/heads/master",
-        "rev": "f8b036594ea2a36b529e10b584b7d2851a3ac5c8",
-        "revCount": 2425,
+        "rev": "8ad99f10f41e813253ba1146efc83ca4cfdb3510",
+        "revCount": 2411,
         "submodules": true,
         "type": "git",
         "url": "https://github.com/logos-messaging/logos-delivery"

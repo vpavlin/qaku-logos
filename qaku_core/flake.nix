@@ -5,7 +5,7 @@
     # qaku_core now depends on the loam_core FACADE (not delivery_module directly): it moves
     # sealed bytes through loam_core, which owns the delivery node (+ future ble_mesh). One
     # module-builder across all of them (loam_core's delivery follows it too) = one SDK ABI.
-    loam_core.url = "github:vpavlin/loam-basecamp?dir=core";
+    loam_core.url = "path:/home/vpavlin/loam-basecamp/core";
     logos-module-builder.url = "github:logos-co/logos-module-builder/0.2.6";
     loam_core.inputs.logos-module-builder.follows = "logos-module-builder";
   };

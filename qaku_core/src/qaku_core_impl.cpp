@@ -801,18 +801,21 @@ void QakuCoreImpl::bootstrapDelivery() {
     // CLUSTER 3 while liblogosdelivery's baked preset still maps logos.dev→cluster 2 — so
     // a fresh node dialed the now-cluster-3 boxes with cluster-2 config and never meshed.
     // logos.test stays cluster 2, keeping qaku's shard (sha256("qaku"+"1") % 8 = 0) valid.
-    // delivery v0.2.0 uses the LAYERED createNode shape and discovers the fleet via discv5
-    // from the `logos.test` preset. Its strict top-level parser REJECTS bare WakuNodeConf keys
-    // (entryNodes/relay/logLevel), and manual entryNodes never mesh without discovery anyway —
-    // discv5-udp-port is REQUIRED or the node stays at 0 peers. So send the canonical config:
-    // preset picks the cluster-2 fleet; qaku's shard (sha256("qaku"+"1")%8 = 0) is content-topic
-    // derived, unaffected. (Same fix as kym_core; verified meshing against delivery v0.2.0.)
+    // Custom Reliable-Channels delivery (8ad99f10): its parser REJECTS `messagingOverrides`
+    // (the old v0.1.3/v0.2.0 shape) and accepts TOP-LEVEL `entryNodes` — the 6 logos.test fleet
+    // nodes as explicit bootstrap peers, which is what actually meshes the node (preset discv5
+    // alone peer-drops). Same shape kym_core uses via KYM_DELIVERY_CFG; verified: perun_core on
+    // this delivery dials the fleet + nodeReady with this config. A hub overrides ports via
+    // QAKU_DELIVERY_CFG (camelCase tcpPort/discv5UdpPort, this delivery's schema).
     LogosMap cfg = {
-        {"mode", "Core"}, {"preset", "logos.test"},
-        {"messagingOverrides", {
-            {"logLevel", "INFO"},
-            {"tcp-port", 30303},
-            {"discv5-udp-port", 9000},
+        {"mode", "Core"}, {"preset", "logos.test"}, {"relay", true},
+        {"entryNodes", {
+            "/dns4/node-01.do-ams3.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmQ9X2xDfPG3uL77V9piYDhjq14JhKCtcmNYsTMKNqrKCj",
+            "/dns4/node-02.do-ams3.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmB8NYprrfQrgWVzsJtYWkfjsXbmJEGNMG6othXsQ53BwG",
+            "/dns4/node-01.gc-us-central1-a.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmF8WtwGPmeGHgYAX2277jHgy5cW9F7zsB8EqUjBZQAZQ3",
+            "/dns4/node-02.gc-us-central1-a.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmUuXhUW9bdJpzN1kfDziFiUZo4bszTk66cvr7uuyCHXR7",
+            "/dns4/node-01.ac-cn-hongkong-c.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmL3oU95jh1BZHozn3uNhx8HEneirgr8M1jEAapzXGDqRF",
+            "/dns4/node-02.ac-cn-hongkong-c.logos.test.status.im/tcp/30303/p2p/16Uiu2HAm28CoBZjpyxsanC8tQpbvZ7bZJnVYuB1EgFzb571qpWsV",
         }},
     };
     if (const char* ov = std::getenv("QAKU_DELIVERY_CFG")) {
