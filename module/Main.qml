@@ -105,11 +105,25 @@ Item {
         if (typeof logos !== "undefined" && logos.onModuleEvent) logos.onModuleEvent("qaku_core", "stateChanged");
         root.refresh();
     }
+    // Deferred state apply (see onModuleEventReceived): holds the latest pushed snapshot and
+    // applies it on the next event-loop tick, never synchronously inside the push handler.
+    property var _pendingState: undefined
+    function _applyPending() {
+        if (root._pendingState === undefined) return;
+        var d = root._pendingState; root._pendingState = undefined;
+        root.apply(asState(d));
+    }
     Connections {
         target: (typeof logos !== "undefined") ? logos : null
         ignoreUnknownSignals: true
         function onModuleEventReceived(module, event, data) {
-            if (module === "qaku_core") root.apply(asState(data));
+            // Defer the apply OUT of this signal handler. Applying synchronously here rebuilds
+            // the questions model mid-handler, which can destroy a question delegate while one of
+            // ITS signal handlers is still running -> "Object destroyed while one of its QML signal
+            // handlers is in progress" -> Aborted. A burst of received messages (each a stateChanged)
+            // makes it reliable. Qt.callLater coalesces the burst into a single apply of the latest
+            // snapshot on the next tick (same pattern as buildQr; see onSecretChanged above).
+            if (module === "qaku_core") { root._pendingState = data; Qt.callLater(root._applyPending); }
         }
     }
 
