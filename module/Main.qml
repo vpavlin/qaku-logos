@@ -236,6 +236,14 @@ Item {
     Timer { id: toastTimer; interval: 3200; onTriggered: root.toastText = "" }
     function toast(t) { root.toastText = t; toastTimer.restart(); }
     function act(m, a, err) { if (!root.mutate(m, a)) root.toast(err || "Action failed - check qaku_core"); }
+    // ---- delete a Q&A (local removal via qaku_core.deleteSession), gated by a confirm step ----
+    property string confirmDeleteId: ""
+    property string confirmDeleteTitle: ""
+    function askDelete(id, title) { root.confirmDeleteId = id || ""; root.confirmDeleteTitle = title || "Untitled Q&A"; }
+    function doDelete() {
+        var id = root.confirmDeleteId; root.confirmDeleteId = "";
+        if (id.length > 0 && root.mutate("deleteSession", [id])) root.toast("Q&A deleted");
+    }
 
     Rectangle { anchors.fill: parent; color: root.qkBg }
 
@@ -427,6 +435,24 @@ Item {
                                     implicitWidth: closedLbl.implicitWidth + Theme.spacing.small
                                     implicitHeight: closedLbl.implicitHeight + 4
                                     LogosText { id: closedLbl; anchors.centerIn: parent; text: "closed"; color: Theme.palette.textTertiary; font.pixelSize: Theme.typography.badgeText }
+                                }
+                                // Delete this Q&A. Its own MouseArea sits above the row's switch handler.
+                                Rectangle {
+                                    Layout.preferredWidth: 24; Layout.preferredHeight: 24
+                                    radius: 12
+                                    color: delMa.containsMouse ? Theme.palette.overlayOrange : "transparent"
+                                    border.color: delMa.containsMouse ? Theme.palette.error : Theme.palette.borderHairline
+                                    border.width: 1
+                                    LogosText {
+                                        anchors.centerIn: parent; text: "×"
+                                        color: delMa.containsMouse ? Theme.palette.error : Theme.palette.textTertiary
+                                        font.pixelSize: Theme.typography.primaryText
+                                    }
+                                    MouseArea {
+                                        id: delMa; anchors.fill: parent; hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.askDelete(modelData.id, modelData.title)
+                                    }
                                 }
                             }
                             RowLayout {
@@ -1272,6 +1298,62 @@ Item {
                     color: Theme.palette.error
                     font.pixelSize: Theme.typography.secondaryText
                     wrapMode: Text.WordWrap
+                }
+            }
+        }
+    }
+
+    // ---- delete-Q&A confirmation overlay (child of root, above everything) ----
+    Rectangle {
+        visible: root.confirmDeleteId.length > 0
+        anchors.fill: parent
+        z: 1000
+        color: "#99000000"
+        MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: root.confirmDeleteId = "" }
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 4 * Theme.spacing.large, 420)
+            implicitHeight: delCol.implicitHeight + 2 * Theme.spacing.large
+            radius: Theme.spacing.radiusSmall
+            color: root.qkSurface
+            border.color: Theme.palette.error; border.width: 1
+            MouseArea { anchors.fill: parent }
+            ColumnLayout {
+                id: delCol
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.margins: Theme.spacing.large
+                spacing: Theme.spacing.medium
+                LogosText {
+                    Layout.fillWidth: true
+                    text: "Delete this Q&A?"
+                    color: Theme.palette.text; font.weight: Theme.typography.weightBold
+                    font.pixelSize: Theme.typography.primaryText
+                }
+                LogosText {
+                    Layout.fillWidth: true
+                    text: "“" + root.confirmDeleteTitle + "” will be removed from this device. This can't be undone."
+                    color: Theme.palette.textTertiary; wrapMode: Text.WordWrap
+                    font.pixelSize: Theme.typography.secondaryText
+                }
+                RowLayout {
+                    Layout.fillWidth: true; spacing: Theme.spacing.small
+                    Item { Layout.fillWidth: true }
+                    Rectangle {
+                        implicitWidth: cancelLbl.implicitWidth + 2 * Theme.spacing.medium
+                        implicitHeight: cancelLbl.implicitHeight + Theme.spacing.small
+                        radius: Theme.spacing.radiusSmall; color: "transparent"
+                        border.color: Theme.palette.borderHairline; border.width: 1
+                        LogosText { id: cancelLbl; anchors.centerIn: parent; text: "Cancel"; color: Theme.palette.text; font.pixelSize: Theme.typography.secondaryText }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.confirmDeleteId = "" }
+                    }
+                    Rectangle {
+                        implicitWidth: delLbl.implicitWidth + 2 * Theme.spacing.medium
+                        implicitHeight: delLbl.implicitHeight + Theme.spacing.small
+                        radius: Theme.spacing.radiusSmall; color: Theme.palette.error
+                        LogosText { id: delLbl; anchors.centerIn: parent; text: "Delete"; color: "#ffffff"; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightBold }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.doDelete() }
+                    }
                 }
             }
         }
