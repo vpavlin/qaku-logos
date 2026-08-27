@@ -103,7 +103,7 @@ Item {
         // safely on the next event-loop tick. (The mutation also makes qaku_core emit
         // stateChanged, so the view still converges even if this result is dropped.)
         var res = asState(callCore(m, a));
-        if (res) { root._pendingState = res; Qt.callLater(root._applyPending); return true; }
+        if (res) { root._pushState(res); return true; }
         return false;
     }
 
@@ -114,24 +114,28 @@ Item {
     // down. Keep only a slow safety poll for a rarely-dropped push, and apply it DEFERRED (never
     // synchronously) so it can neither crash nor stall the loop.
     Timer {
-        interval: 12000; running: true; repeat: true
-        onTriggered: {
-            var o = root.asState(root.callCore("snapshot", []));
-            if (o) { root._pendingState = o; Qt.callLater(root._applyPending); }
-        }
+        interval: 6000; running: true; repeat: true
+        onTriggered: root._pushState(root.asState(root.callCore("snapshot", [])))
     }
     Component.onCompleted: {
         if (typeof logos !== "undefined" && logos.onModuleEvent) logos.onModuleEvent("qaku_core", "stateChanged");
         root.refresh();
     }
-    // Deferred state apply (see onModuleEventReceived): holds the latest pushed snapshot and
-    // applies it on the next event-loop tick, never synchronously inside the push handler.
+    // Deferred, crash-safe state apply. _pendingState holds a PARSED state object (asState output),
+    // applied on the next event-loop tick -- NEVER synchronously inside a signal handler (a click's
+    // mutate, or a received-message push), where reassigning root.st would destroy the delegate whose
+    // handler is still on the stack -> "Object destroyed ... handler in progress" -> Aborted.
     property var _pendingState: undefined
     function _applyPending() {
         if (root._pendingState === undefined) return;
-        var d = root._pendingState; root._pendingState = undefined;
-        root.apply(asState(d));
+        var o = root._pendingState; root._pendingState = undefined;
+        root.apply(o);
     }
+    // Every state source (push, poll, mutate result) routes through here: it takes an ALREADY-PARSED
+    // object, stashes the latest, and coalesces a burst into one deferred apply. (0.1.23 bug: callers
+    // stored a parsed object but _applyPending re-ran asState on it -> null -> the view never updated
+    // and clicks "did nothing"; a click's object also clobbered a pushed update -> messages vanished.)
+    function _pushState(o) { if (!o) return; root._pendingState = o; Qt.callLater(root._applyPending); }
     Connections {
         target: (typeof logos !== "undefined") ? logos : null
         ignoreUnknownSignals: true
@@ -142,7 +146,7 @@ Item {
             // handlers is in progress" -> Aborted. A burst of received messages (each a stateChanged)
             // makes it reliable. Qt.callLater coalesces the burst into a single apply of the latest
             // snapshot on the next tick (same pattern as buildQr; see onSecretChanged above).
-            if (module === "qaku_core") { root._pendingState = data; Qt.callLater(root._applyPending); }
+            if (module === "qaku_core") root._pushState(root.asState(data));
         }
     }
 
