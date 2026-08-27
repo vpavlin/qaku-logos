@@ -9,6 +9,7 @@
 #include "qaku_core_impl.h"
 #include "logos_sdk.h"   // umbrella: LogosModules + LogosMap(nlohmann::json) + StdLogosResult
 #include "qrcodegen.hpp"  // vendored Nayuki QR encoder (the host qr core is unreachable from a pure-QML view)
+#include "logos_sync/catchup.hpp"  // RBSR recursive set-reconciliation catch-up (replaces the whole-log SYNC_REQ flood)
 #include <QTimer>
 #include <chrono>
 #include <cstdio>
@@ -199,7 +200,7 @@ void QakuCoreImpl::applySecret(Session& s, const qaku::Bytes& secret, bool persi
     if (persist) qaku::persist::writePairKey(s.dir, secret);   // <dir>/pair.key (no-op if dir empty)
     // If delivery is already up, join this session's topic + seed its log. Else
     // the first snapshot()/hub tick bootstraps delivery and subscribes them all.
-    if (m_nodeReady) { joinTransport(s); for (auto& e : s.log) sealAndSend(s, e); }
+    if (m_nodeReady) { joinTransport(s); sealAndSendJson(s, logos_sync::catchup::buildInitial(s.log, m_deviceId)); }
 }
 
 qaku::HLC QakuCoreImpl::nextHlc(Session& s) {
@@ -226,14 +227,18 @@ void QakuCoreImpl::onContextReady() {
     loadOverlayConfig();
     applyOverlayConfig();   // no-op unless the user enabled it; default is OFF
     bootstrapDelivery();
-    // Headless hub self-drive: a QTimer on the event-loop thread (NEVER a
-    // std::thread - the delivery async callbacks only dispatch on this thread, so
-    // a worker-thread driver leaves createNode hanging). Armed by QAKU_HUB.
-    if (std::getenv("QAKU_HUB")) {
-        m_hubTimer = new QTimer();
-        QObject::connect(m_hubTimer, &QTimer::timeout, [this]{ std::lock_guard<std::recursive_mutex> lk(m_mtx); if (!m_nodeReady) bootstrapDelivery(); else resync(); });
-        m_hubTimer->start(15000);
-    }
+    // Periodic sync for EVERY client (not just hubs): an RBSR catch-up round so a peer that
+    // missed live traffic reconciles the EXACT delta with whoever is online — the recovery path
+    // a plain client (Basecamp) never had (it only seeded on connect and re-served on request).
+    // A QTimer on the event-loop thread (NEVER a std::thread - the delivery async callbacks only
+    // dispatch on this thread). On a hub, also keep retrying connect while the node is down.
+    m_hubTimer = new QTimer();
+    QObject::connect(m_hubTimer, &QTimer::timeout, [this]{
+        std::lock_guard<std::recursive_mutex> lk(m_mtx);
+        if (!m_nodeReady) { if (std::getenv("QAKU_HUB")) bootstrapDelivery(); return; }
+        catchupRound();
+    });
+    m_hubTimer->start(15000);
     publishState();
 }
 
@@ -581,7 +586,7 @@ std::string QakuCoreImpl::resync() {
     // net for peers that missed live traffic.
     if (m_nodeReady && nowMs() - m_lastPeriodicReserveMs >= 60000) {
         m_lastPeriodicReserveMs = nowMs();
-        for (auto& kv : m_sessions) if (kv.second.haveKey) for (auto& e : kv.second.log) sealAndSend(kv.second, e);
+        catchupRound();   // RBSR: reconcile the delta with whoever's online, not a whole-log re-serve
     }
     publishState(); return m_snapshot;
 }
@@ -782,7 +787,7 @@ void QakuCoreImpl::bootstrapDelivery() {
                 setStatus("Connected - " + std::to_string(m_order.size()) + " session(s)");
                 // Seed the log ONCE on node-up. A joining peer pulls reliably via SYNC_REQ, so
                 // a single seed is enough; the periodic resync (rate-limited) is the safety net.
-                for (auto& kv : m_sessions) if (kv.second.haveKey) for (auto& e : kv.second.log) sealAndSend(kv.second, e);
+                catchupRound();   // RBSR: reconcile the delta with whoever's online, not a whole-log re-serve
                 publishState();
             } catch (const std::exception& ex) {
                 fprintf(stderr, "QAKUDBG ready EXCEPTION: %s\n", ex.what());
@@ -865,6 +870,31 @@ void QakuCoreImpl::sealAndSend(Session& s, const Event& e) {
     m_txTotal++;
 }
 
+// Seal+send an RBSR control frame (fp/ids/need). Unlike an event it carries no immutable id, so it
+// uses a RANDOM ephemeral nonce — a control frame must never be collapsed/deduped by the store.
+// Received frames open fine: open() reads the nonce off the wire.
+void QakuCoreImpl::sealAndSendJson(Session& s, const nlohmann::json& msg) {
+    if (!s.haveKey || !m_nodeReady) return;
+    std::string plain = msg.dump();
+    qaku::Bytes r(16); RAND_bytes(r.data(), 16);
+    std::string ephId = qaku::toHex(r.data(), 16);
+    qaku::Bytes sealed = qaku::seal(s.identity, ephId, qaku::Bytes(plain.begin(), plain.end()), s.topic);
+    deliverySend(s.topic, b64(sealed));
+    m_txTotal++;
+}
+
+// One RBSR catch-up round: publish a bounded "fp" over each held session's id-set. The peer's
+// respond() splits/reconciles and serves ONLY the exact events either side lacks — never the whole
+// log. Runs on connect and on the periodic timer for EVERY client, so dropped messages are
+// recovered instead of lost. This is what replaces the whole-log SYNC_REQ flood (the 19KB frames).
+void QakuCoreImpl::catchupRound() {
+    for (auto& kv : m_sessions) {
+        Session& s = kv.second;
+        if (!s.haveKey || !m_nodeReady) continue;
+        sealAndSendJson(s, logos_sync::catchup::buildInitial(s.log, m_deviceId));
+    }
+}
+
 bool QakuCoreImpl::deliverySend(const std::string& topic, const std::string& sealedB64) {
     if (!m_nodeReady) return false;
     // loam_core.sendSealed fans our sealed payload (base64 TEXT of the sealed bytes) to every
@@ -908,6 +938,16 @@ bool QakuCoreImpl::openAndPush(Session& s, const std::string& sealed) {
     try {
         json o = json::parse(plain);
         const std::string type = o.value("type", "");
+        // RBSR catch-up control frame (fp/ids/need): reconcile the id-set and serve/pull the EXACT
+        // delta. respond() is a pure state-machine step; its replies + served events go back over the
+        // channel and converge in a few rounds. This is the recovery path that a plain client lacked.
+        const std::string t = o.value("t", std::string());
+        if (o.value("v", 0) == 2 && (t == "fp" || t == "ids" || t == "need")) {
+            auto stp = logos_sync::catchup::respond(s.log, o, m_deviceId);
+            for (auto& reply : stp.replies) sealAndSendJson(s, reply);
+            for (auto& ev : stp.serve)   sealAndSend(s, ev);
+            return true;
+        }
         if (type == "SYNC_REQ") {
             // Re-serve the whole log (idempotent — peers dedup by id). Ignore our own
             // request echoed back. Debounced to 3s so a reconnecting peer spamming

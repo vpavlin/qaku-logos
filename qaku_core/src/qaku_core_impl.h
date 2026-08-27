@@ -152,6 +152,8 @@ private:
     void ingestPayload(const std::string& contentTopic, const std::string& payloadB64, bool channelPath = true);
     bool openAndPush(Session& s, const std::string& sealed);
     void sealAndSend(Session& s, const qaku::Event& e);
+    void sealAndSendJson(Session& s, const nlohmann::json& msg);   // seal+send a control frame (RBSR fp/ids/need) with an ephemeral nonce
+    void catchupRound();                                            // RBSR: publish a bounded fp per session so a peer reconciles the exact delta
     bool deliverySend(const std::string& topic, const std::string& sealedB64);   // true iff dispatched to the channel
     void applySecret(Session& s, const qaku::Bytes& secret, bool persist);
 
