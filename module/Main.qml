@@ -95,12 +95,31 @@ Item {
     // QML render ("view does not load"). callLater runs it after the view is rendered.
     onSecretChanged: if (root.secret !== root.lastQrSecret) Qt.callLater(root.buildQr)
     function mutate(m, a) {
+        // NEVER apply the result synchronously here. This runs inside a delegate's onClicked
+        // (add/edit/vote/answer), and apply() reassigns root.st, which destroys that very
+        // delegate while its handler is still on the stack -> "Object destroyed while one of
+        // its QML signal handlers is in progress" -> Aborted (the click-crash). Defer via the
+        // same _pendingState/callLater path the pushed stateChanged uses, so the model rebuilds
+        // safely on the next event-loop tick. (The mutation also makes qaku_core emit
+        // stateChanged, so the view still converges even if this result is dropped.)
         var res = asState(callCore(m, a));
-        if (res) { apply(res); return true; }
+        if (res) { root._pendingState = res; Qt.callLater(root._applyPending); return true; }
         return false;
     }
 
-    Timer { interval: 2500; running: true; repeat: true; onTriggered: root.refresh() }
+    // The view is kept current by the async stateChanged push (see onModuleEventReceived below),
+    // so we do NOT poll snapshot() on a fast synchronous timer. That 2.5s blocking callModule on
+    // the QML event loop is what froze the UI when qaku_core was busy (large session / heavy
+    // receive), and a click during the freeze piled a second blocking call on and took the host
+    // down. Keep only a slow safety poll for a rarely-dropped push, and apply it DEFERRED (never
+    // synchronously) so it can neither crash nor stall the loop.
+    Timer {
+        interval: 12000; running: true; repeat: true
+        onTriggered: {
+            var o = root.asState(root.callCore("snapshot", []));
+            if (o) { root._pendingState = o; Qt.callLater(root._applyPending); }
+        }
+    }
     Component.onCompleted: {
         if (typeof logos !== "undefined" && logos.onModuleEvent) logos.onModuleEvent("qaku_core", "stateChanged");
         root.refresh();
