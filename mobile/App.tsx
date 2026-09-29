@@ -3,7 +3,7 @@
 // with optional display names; a small collapsible sync line keeps the diagnostics out
 // of the way. Palette = the original qaku (dark + gold primary + teal accent).
 import React, { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState, RefreshControl, Image, StatusBar } from "react-native";
+import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState, RefreshControl, Image, StatusBar, Alert } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
@@ -116,6 +116,18 @@ function AppInner() {
     setTimeout(() => setRefreshing(false), 900);
   };
   const openRoom = (h: string) => { sessions.markSeen(h); setOpenHash(h); };
+  // Long-press a Q&A in the list → delete it from this device (others keep it).
+  const confirmDelete = (r: any) => {
+    Alert.alert(
+      `Delete "${r.title}"?`,
+      (r.owned ? "You host this Q&A. " : "") +
+        "It's removed from this device only; others keep it. To get it back you need its secret or QR code from someone who still has it.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: () => { sessions.deleteRoom(r.topicHash).catch(() => {}); } },
+      ],
+    );
+  };
   const leaveRoom = () => { if (openHash) sessions.markSeen(openHash); setOpenHash(null); };
   // Star → keep this Q&A synced in the background (foreground service + notifications).
   const toggleStar = async (h: string) => { await sessions.toggleStar(h); await updateKeepAlive(sessions.starredCount()); };
@@ -206,7 +218,7 @@ function AppInner() {
         <ScrollView style={{ flex: 1 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} colors={[C.primary]} progressBackgroundColor={C.surface} />}>
           {rooms.length === 0 ? <Text style={s.empty}>No Q&As yet. Create one, or join with a secret / QR.</Text> : null}
           {rooms.map((r) => (
-            <TouchableOpacity key={r.topicHash} style={[s.roomCard, r.unread > 0 && s.roomCardUnread]} onPress={() => openRoom(r.topicHash)}>
+            <TouchableOpacity key={r.topicHash} style={[s.roomCard, r.unread > 0 && s.roomCardUnread]} onPress={() => openRoom(r.topicHash)} onLongPress={() => confirmDelete(r)}>
               <View style={{ flex: 1 }}>
                 <Text style={[s.roomTitle, r.unread > 0 && { color: C.text }]} numberOfLines={1}>{r.title}</Text>
                 <Text style={s.roomSub}>{r.questions} question{r.questions === 1 ? "" : "s"}{r.owned ? "  ·  you host" : ""}</Text>

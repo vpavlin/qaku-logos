@@ -6,6 +6,7 @@
 import * as transport from "./loam-transport";
 import { deriveIdentity, topicFor, seal, open, newSecret, randToken as randSealToken, Identity as SealId } from "./crypto";
 import { encodeEvent } from "./wire";
+import { buildInitial, respond } from "./catchup";
 import { utf8Bytes, utf8Decode } from "./utf8";
 import { getDeviceId } from "./device";
 import { getIdentity, Identity, shortAddr } from "./identity";
@@ -149,19 +150,18 @@ export class Sessions {
       this.resync();
       setTimeout(() => { this.lastResync = 0; this.resync(); }, 9000);
       setTimeout(() => { this.lastResync = 0; this.resync(); }, 24000);
-      // Periodically push our logs so a peer that subscribes LATER (e.g. Basecamp joining
-      // by secret) catches up even though it never sends a SYNC_REQ. Rate-limited inside.
+      // Periodic range-based catch-up (RBSR, same protocol as qaku_core >= 0.1.19): each round sends
+      // one small fingerprint per room, and only the events a peer is actually missing move. This
+      // replaced a 60 s re-broadcast of every room's whole log, which saturated Bluetooth links.
       if (this.seedTimer) clearInterval(this.seedTimer);
-      this.seedTimer = setInterval(() => this.seedAll(), 60000);
-      setTimeout(() => this.seedAll(), 4000);
+      this.seedTimer = setInterval(() => { for (const room of this.rooms.values()) this.sendCatchup(room); }, 30000);
     } catch (e: any) {
       onStatus?.("offline — reopen to retry");
     }
   }
 
   private syncRoom(room: Room) {
-    this.sendSyncReq(room).catch(() => {});                 // pull: ask peers to re-serve
-    setTimeout(() => this.seedRoom(room), 1500);            // push: re-broadcast ours (for already-subscribed peers)
+    this.sendSyncReq(room).catch(() => {});                 // RBSR round (+ legacy request for old peers)
     transport.storeSync((t, cands) => this.onCandidates(t, cands)).then(() => this.emit()).catch(() => {});
   }
 
@@ -201,7 +201,10 @@ export class Sessions {
           if (this.unconfirmed.delete(envlp.event.id)) { this.saveUnconfirmed(); this.emit(); }
           this.ingest(room, envlp.event);
         }
-        else if (envlp && envlp.type === "SYNC_REQ") this.serveLog(room, typeof envlp.from === "string" ? envlp.from : "");
+        else if (envlp && envlp.v === 2 && (envlp.t === "fp" || envlp.t === "ids" || envlp.t === "need")) this.onCatchup(room, envlp);
+        // Legacy whole-log request. New peers mark theirs `rbsr` (their fingerprint round covers it) —
+        // serving those too would bring back the re-broadcast flood between two new phones.
+        else if (envlp && envlp.type === "SYNC_REQ" && !envlp.rbsr) this.serveLog(room, typeof envlp.from === "string" ? envlp.from : "");
       } catch { /* opened but not an envelope */ }
       return true;
     }
@@ -257,8 +260,25 @@ export class Sessions {
     const sealed = seal(room.sealId, sealId, utf8Bytes(JSON.stringify(envObj)), room.topic);
     await transport.publishSealed(room.topic, sealed);
   }
+  // A catch-up round: an RBSR fingerprint (new peers + qaku_core >= 0.1.19), plus a legacy SYNC_REQ
+  // so older phones / desktops still serve us their logs. The `rbsr` flag tells new peers to ignore it.
   private async sendSyncReq(room: Room) {
-    await this.publish(room, { v: 1, type: "SYNC_REQ", from: this.deviceId }).catch(() => {});
+    this.sendCatchup(room);
+    await this.publish(room, { v: 1, type: "SYNC_REQ", from: this.deviceId, rbsr: 1 }).catch(() => {});
+  }
+  private sendCatchup(room: Room) {
+    this.publish(room, buildInitial(room.log, this.deviceId)).catch(() => {});
+  }
+  // RBSR step: answer a peer's fp/ids/need with narrower ranges, and send exactly the events it lacks.
+  private async onCatchup(room: Room, msg: any) {
+    if (!msg || msg.from === this.deviceId) return;   // our own message echoed back
+    let step;
+    try { step = respond(room.log, msg, this.deviceId); } catch { return; }
+    for (const r of step.replies) this.publish(room, r).catch(() => {});
+    for (let i = 0; i < step.serve.length; i++) {
+      this.publish(room, { v: 1, type: "EVENT", event: step.serve[i] }).catch(() => {});
+      if ((i & 7) === 7) await new Promise((res) => setTimeout(res, 25));   // yield — never freeze the UI
+    }
   }
   private serveLog(room: Room, from: string) {
     if (from && from === this.deviceId) return;
@@ -279,7 +299,6 @@ export class Sessions {
       if ((i & 7) === 7) await new Promise((r) => setTimeout(r, 25)); // yield every 8 events — never freeze the UI
     }
   }
-  private seedAll() { for (const room of this.rooms.values()) this.seedRoom(room); }
 
   // Author a signed event into a room: stamp HLC → sign (author=our address) → fold →
   // seal + publish. Returns immediately after local fold; publish is best-effort async.
@@ -363,9 +382,19 @@ export class Sessions {
     return room.meta.topicHash;
   }
 
-  async leaveRoom(topicHash: string) {
+  // Delete a Q&A from THIS device: registry entry, log file, star, unread mark and queued sends.
+  // Other members keep it; re-joining with its secret/QR brings it back (history re-syncs from them).
+  // Frames that still arrive on its topic are ignored (onCandidates finds no room).
+  async deleteRoom(topicHash: string) {
     const room = this.byHash.get(topicHash); if (!room) return;
     this.rooms.delete(room.topic); this.byHash.delete(topicHash);
+    clearTimeout(this.saveTimers.get(topicHash)); this.saveTimers.delete(topicHash);
+    for (const e of room.log) this.unconfirmed.delete(e.id);
+    this.saveUnconfirmed();
+    this.lastSeed.delete(topicHash);
+    if (this.starred.delete(topicHash)) { try { await SecureStore.setItemAsync("qaku-starred", JSON.stringify([...this.starred])); } catch { /* */ } }
+    if (this.seenTs.delete(topicHash)) { try { await SecureStore.setItemAsync("qaku-seen", JSON.stringify(Object.fromEntries(this.seenTs))); } catch { /* */ } }
+    try { await FileSystem.deleteAsync(logPath(topicHash), { idempotent: true }); } catch { /* */ }
     await this.saveRegistry(); this.emit();
   }
 
