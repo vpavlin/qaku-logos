@@ -112,10 +112,15 @@ const VERIFY_CACHE_MAX = 20000;
 export function verifyEvent(ev) {
   let key;
   try {
-    if (!ev || !ev.pub || !ev.sig) return false;
-    key = ev.pub + "|" + ev.sig + "|" + canonicalMessage(ev);
+    if (!ev || typeof ev.pub !== "string" || typeof ev.sig !== "string") return false;
+    // Fixed-format fields only: a free-form separator-joined key let a crafted id/sig collide with a
+    // genuine event's cache entry (a member could forge a "verified" event as someone else).
+    if (!/^[0-9a-f]{66}$/.test(ev.pub) || !/^[0-9a-f]{128}$/.test(ev.sig)) return false;
+    const dev = (ev.hlc && ev.hlc.dev) || ev.dev;
+    if (!dev) return false;
+    key = ev.pub + ":" + ev.sig + ":" + hex(sha256(utf8Bytes(canonicalMessage(ev))));
     const hit = verifyCache.get(key);
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) return hit && addressFor(fromHex(ev.pub)) === dev;   // author check on every call
   } catch { return false; }
   const ok = verifyEventUncached(ev);
   if (verifyCache.size >= VERIFY_CACHE_MAX) verifyCache.clear();

@@ -37,7 +37,7 @@ const rid = () => Math.random().toString(16).slice(2, 14);
 const REG_KEY = "qaku-rooms-v1";
 
 export type RoomMeta = { topicHash: string; secretHex: string; title: string };
-type Room = { meta: RoomMeta; sealId: SealId; topic: string; log: any[]; ids: Set<string>; clock: any };
+type Room = { meta: RoomMeta; sealId: SealId; topic: string; log: any[]; ids: Set<string>; clock: any; deleted?: boolean };
 
 // The shareable pairing artifact — same secret-in-URL model as OG qaku.
 export const shareUriFor = (secretHex: string) => "qaku://join?s=" + secretHex;
@@ -87,7 +87,8 @@ export class Sessions {
   private scheduleSave(room: Room) {
     const h = room.meta.topicHash;
     clearTimeout(this.saveTimers.get(h));
-    this.saveTimers.set(h, setTimeout(() => saveLogFile(h, room.log), 400));
+    if (room.deleted) return;
+    this.saveTimers.set(h, setTimeout(() => { if (!room.deleted) saveLogFile(h, room.log); }, 400));
   }
 
   subscribe(fn: () => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
@@ -171,7 +172,7 @@ export class Sessions {
 
   private syncRoom(room: Room) {
     this.sendSyncReq(room).catch(() => {});                 // RBSR round (+ legacy request for old peers)
-    transport.storeSync((t, cands) => this.onCandidates(t, cands)).then(() => this.emit()).catch(() => {});
+    transport.storeSync((t, cands) => this.onCandidates(t, cands, true)).then(() => this.emit()).catch(() => {});
   }
 
   // Full catch-up round across every room: ask peers to re-serve (SYNC_REQ), push ours,
@@ -190,11 +191,13 @@ export class Sessions {
     // loop and pull-to-refresh don't seal the whole log and jank the UI.
     for (const room of this.rooms.values()) this.sendSyncReq(room).catch(() => {});
     this.retryUnpublished();   // re-send anything still queued; storeSync below will confirm it
-    try { await transport.storeSync((t, cands) => this.onCandidates(t, cands)); this.emit(); } catch { /* */ }
+    try { await transport.storeSync((t, cands) => this.onCandidates(t, cands, true)); this.emit(); } catch { /* */ }
   }
 
   // Route an inbound payload to the room owning that topic; open with the room key; fold.
-  private onCandidates(topic: string, candidates: Uint8Array[]): boolean {
+  // fromStore: replayed from the fleet store's history. Only events count there; old catch-up control
+  // frames (fingerprints, requests) are stale and answering them would re-send events for nothing.
+  private onCandidates(topic: string, candidates: Uint8Array[], fromStore = false): boolean {
     const room = this.rooms.get(topic);
     if (!room) return false;
     // `candidates` are decode-alternatives of ONE message (single/double-b64/raw); the first
@@ -210,6 +213,7 @@ export class Sessions {
           if (this.unconfirmed.delete(envlp.event.id)) { this.saveUnconfirmed(); this.emit(); }
           this.ingest(room, envlp.event);
         }
+        else if (fromStore) { /* stale control frame from history: ignore */ }
         else if (envlp && envlp.v === 2 && (envlp.t === "fp" || envlp.t === "ids" || envlp.t === "need")) this.onCatchup(room, envlp);
         // Legacy whole-log request. New peers mark theirs `rbsr` (their fingerprint round covers it) —
         // serving those too would bring back the re-broadcast flood between two new phones.
@@ -320,6 +324,7 @@ export class Sessions {
     // "publish → kill the app → reopen" loses it before the timer fires. Durable before we
     // even attempt the network send.
     await this.flushSave(room);
+    if (room.deleted) return;   // deleted while saving: don't queue a send for a room that's gone
     // Mark "queued" (durable) BEFORE the send, then attempt it. trySend clears it once the
     // send lands in a live mesh; a mesh-gap send stays queued and retryUnpublished resends.
     this.unconfirmed.add(event.id); this.saveUnconfirmed();
@@ -329,6 +334,7 @@ export class Sessions {
   // Write a room's log to disk NOW, cancelling any pending debounced save.
   private async flushSave(room: Room) {
     clearTimeout(this.saveTimers.get(room.meta.topicHash));
+    if (room.deleted) return;
     await saveLogFile(room.meta.topicHash, room.log);
   }
 
@@ -396,6 +402,7 @@ export class Sessions {
   // Frames that still arrive on its topic are ignored (onCandidates finds no room).
   async deleteRoom(topicHash: string) {
     const room = this.byHash.get(topicHash); if (!room) return;
+    room.deleted = true;   // in-flight appends/saves check this and stop
     this.rooms.delete(room.topic); this.byHash.delete(topicHash);
     clearTimeout(this.saveTimers.get(topicHash)); this.saveTimers.delete(topicHash);
     for (const e of room.log) this.unconfirmed.delete(e.id);
@@ -404,6 +411,8 @@ export class Sessions {
     if (this.starred.delete(topicHash)) { try { await SecureStore.setItemAsync("qaku-starred", JSON.stringify([...this.starred])); } catch { /* */ } }
     if (this.seenTs.delete(topicHash)) { try { await SecureStore.setItemAsync("qaku-seen", JSON.stringify(Object.fromEntries(this.seenTs))); } catch { /* */ } }
     try { await FileSystem.deleteAsync(logPath(topicHash), { idempotent: true }); } catch { /* */ }
+    // A save already writing when we deleted can finish afterwards and leave the file behind: sweep again.
+    setTimeout(() => { FileSystem.deleteAsync(logPath(topicHash), { idempotent: true }).catch(() => {}); }, 2000);
     await this.saveRegistry(); this.emit();
   }
 

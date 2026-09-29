@@ -124,7 +124,7 @@ function AppInner() {
         "It's removed from this device only; others keep it. To get it back you need its secret or QR code from someone who still has it.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Delete", style: "destructive", onPress: () => { sessions.deleteRoom(r.topicHash).catch(() => {}); } },
+        { text: "Delete", style: "destructive", onPress: () => { sessions.deleteRoom(r.topicHash).then(() => updateKeepAlive(sessions.starredCount())).catch(() => {}); } },
       ],
     );
   };
