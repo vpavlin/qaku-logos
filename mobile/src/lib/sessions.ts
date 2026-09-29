@@ -283,8 +283,18 @@ export class Sessions {
     this.publish(room, buildInitial(room.log, this.deviceId)).catch(() => {});
   }
   // RBSR step: answer a peer's fp/ids/need with narrower ranges, and send exactly the events it lacks.
+  // At most one answer per (room, peer) per 10 s. Through Loam, store history arrives like live
+  // messages, so replayed old catch-up frames can't be told apart — this caps them to a trickle.
+  // Live rounds are 30 s apart, so a genuine exchange is never throttled.
+  private lastCatchup = new Map<string, number>();
   private async onCatchup(room: Room, msg: any) {
     if (!msg || msg.from === this.deviceId) return;   // our own message echoed back
+    if (msg.t === "fp") {   // only the round-opening fingerprint; ids/need continue a live exchange
+      const k = room.meta.topicHash + "|" + String(msg.from);
+      const now = Date.now();
+      if (now - (this.lastCatchup.get(k) || 0) < 10000) return;
+      this.lastCatchup.set(k, now);
+    }
     let step;
     try { step = respond(room.log, msg, this.deviceId); } catch { return; }
     for (const r of step.replies) this.publish(room, r).catch(() => {});
