@@ -103,7 +103,26 @@ const LEGACY_OPTIONAL = {
 
 // True iff the event is well-signed by the key whose address it claims (dev). Returns
 // false on any malformed/missing field — never throws. The engine drops unverified events.
+// Verification results by the exact signed content. secp256k1.verify costs ~40 ms on Hermes, and the
+// engine re-verifies every event on every fold (each new event invalidates the fold cache), so a room
+// with a few hundred events took seconds to show each incoming message. The key is pub + sig + the
+// canonical message, so a tampered copy never reuses a genuine event's result.
+const verifyCache = new Map();
+const VERIFY_CACHE_MAX = 20000;
 export function verifyEvent(ev) {
+  let key;
+  try {
+    if (!ev || !ev.pub || !ev.sig) return false;
+    key = ev.pub + "|" + ev.sig + "|" + canonicalMessage(ev);
+    const hit = verifyCache.get(key);
+    if (hit !== undefined) return hit;
+  } catch { return false; }
+  const ok = verifyEventUncached(ev);
+  if (verifyCache.size >= VERIFY_CACHE_MAX) verifyCache.clear();
+  verifyCache.set(key, ok);
+  return ok;
+}
+function verifyEventUncached(ev) {
   try {
     if (!ev || !ev.pub || !ev.sig || !ev.type || !ev.id) return false;
     const dev = (ev.hlc && ev.hlc.dev) || ev.dev;
