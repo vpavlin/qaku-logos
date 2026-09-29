@@ -2,7 +2,7 @@
   "expo": {
     "name": "QAKU",
     "slug": "qaku",
-    "version": "0.1.74",
+    "version": "0.1.75",
     "platforms": [
       "android"
     ],
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "xyz.vpavlin.qaku",
-      "versionCode": 74,
+      "versionCode": 75,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundImage": "./assets/adaptive-bg.png",
