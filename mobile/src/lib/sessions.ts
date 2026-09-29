@@ -155,10 +155,17 @@ export class Sessions {
       // replaced a 60 s re-broadcast of every room's whole log, which saturated Bluetooth links.
       if (this.seedTimer) clearInterval(this.seedTimer);
       this.seedTimer = setInterval(() => { for (const room of this.rooms.values()) this.sendCatchup(room); }, 30000);
+      this.connectRetryMs = 15000;
     } catch (e: any) {
-      onStatus?.("offline — reopen to retry");
+      // Local-first: posts keep working offline, so never give up on the connection — retry in the
+      // background (15 s, backing off to 1 min). "Reopen to retry" left every sync path (catch-up,
+      // queued re-sends, joining new rooms) dead until the app restarted.
+      onStatus?.("offline — retrying…");
+      setTimeout(() => { if (!this.started) this.connect(onStatus); }, this.connectRetryMs);
+      this.connectRetryMs = Math.min(this.connectRetryMs * 2, 60000);
     }
   }
+  private connectRetryMs = 15000;
 
   private syncRoom(room: Room) {
     this.sendSyncReq(room).catch(() => {});                 // RBSR round (+ legacy request for old peers)
