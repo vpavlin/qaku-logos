@@ -72,7 +72,7 @@ export class Sessions {
   myAddress = "";
   myName = "";
   nodeMode: "Core" | "Edge" = "Core";
-  useSharedNode = false;   // route through the device-wide Logos Delivery service if installed
+  useSharedNode = true;    // route through the device-wide Loam node if installed (default on; "0" = user opted out)
   listeners = new Set<() => void>();
 
   // Flag "syncing" for a few seconds; extended while events keep arriving, so the UI can
@@ -120,7 +120,9 @@ export class Sessions {
     try { const raw = await SecureStore.getItemAsync("qaku-starred"); if (raw) this.starred = new Set(JSON.parse(raw)); } catch { /* */ }
     try { const m = await SecureStore.getItemAsync("qaku-nodemode"); this.nodeMode = m === "Core" ? "Core" : "Edge"; } catch { /* */ }
     transport.setNodeMode(this.nodeMode);   // must be set BEFORE transport.start()
-    try { this.useSharedNode = (await SecureStore.getItemAsync("qaku-shared-node")) === "1"; } catch { /* */ }
+    // Default ON: use Loam when it's installed (falls back to the embedded node otherwise). Opt-in left
+    // most users on the internet-only embedded node and off the BLE mesh without knowing it.
+    try { this.useSharedNode = (await SecureStore.getItemAsync("qaku-shared-node")) !== "0"; } catch { /* */ }
     // Opt into the device-wide shared node; falls back to an embedded node if the service
     // isn't installed. Must be set BEFORE the first transport call (backend is chosen once).
     (transport as any).preferServiceBackend?.(this.useSharedNode, "qaku");
