@@ -59,7 +59,10 @@ function cjson(v) {
   if (v === null || v === undefined) return "null";
   if (Array.isArray(v)) return "[" + v.map(cjson).join(",") + "]";
   if (typeof v === "object") {
-    const ks = Object.keys(v).sort();
+    // Skip undefined-valued keys: JSON drops them on the wire, so a receiver never sees them. Signing
+    // them as "null" made every event with an unset optional field (answer.post without author,
+    // partial session.config, admin.add without name) fail verification on every OTHER device.
+    const ks = Object.keys(v).filter((k) => v[k] !== undefined).sort();
     return "{" + ks.map((k) => JSON.stringify(k) + ":" + cjson(v[k])).join(",") + "}";
   }
   if (typeof v === "string") return JSON.stringify(v);
@@ -85,6 +88,19 @@ export function signEvent(identity, ev) {
   return ev;
 }
 
+// Per event type: the payload keys its constructor always sets but which may be undefined (so the
+// pre-fix signer hashed them as null). Only used by verifyEvent's legacy fallback.
+const LEGACY_OPTIONAL = {
+  "answer.post": ["author"],
+  "question.add": ["author"],
+  "session.config": ["title", "description", "enabled", "moderationEnabled"],
+  "admin.add": ["name"],
+  "profile.set": ["name"],
+  "question.edit": ["content"],
+  "answer.edit": ["content"],
+  "poll.setActive": ["active"],
+};
+
 // True iff the event is well-signed by the key whose address it claims (dev). Returns
 // false on any malformed/missing field — never throws. The engine drops unverified events.
 export function verifyEvent(ev) {
@@ -96,7 +112,17 @@ export function verifyEvent(ev) {
     if (pub.length !== 33) return false;
     if (addressFor(pub) !== dev) return false;            // pub must match the claimed author
     const digest = sha256(utf8Bytes(canonicalMessage(ev)));
-    return secp256k1.verify(fromHex(ev.sig), digest, pub); // sig must be over the exact fields
+    const sig = fromHex(ev.sig);
+    if (secp256k1.verify(sig, digest, pub)) return true;   // sig must be over the exact fields
+    // Legacy: events signed before the fix above hashed each unset optional field as "null", but the
+    // wire copy lacks the key. Re-add the event type's absent optional keys as null and try again.
+    const opt = LEGACY_OPTIONAL[ev.type];
+    if (!opt || !ev.payload) return false;
+    const missing = opt.filter((k) => !(k in ev.payload));
+    if (missing.length === 0) return false;
+    const payload = { ...ev.payload };
+    for (const k of missing) payload[k] = null;
+    return secp256k1.verify(sig, sha256(utf8Bytes(canonicalMessage({ ...ev, payload }))), pub);
   } catch {
     return false;
   }
