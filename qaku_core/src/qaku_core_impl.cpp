@@ -949,6 +949,9 @@ bool QakuCoreImpl::openAndPush(Session& s, const std::string& sealed) {
             return true;
         }
         if (type == "SYNC_REQ") {
+            // A request flagged `rbsr` comes from a peer that also runs the fp/ids/need catch-up above,
+            // which already sends it exactly what it lacks; re-serving the whole log too is pure flood.
+            if (o.contains("rbsr")) return true;
             // Re-serve the whole log (idempotent — peers dedup by id). Ignore our own
             // request echoed back. Debounced to 3s so a reconnecting peer spamming
             // SYNC_REQ can't restack full re-serves into a flood, while still being
