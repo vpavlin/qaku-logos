@@ -129,6 +129,10 @@ private:
     // event builders + per-session helpers
     qaku::HLC nextHlc(Session& s);
     void pushEvent(Session& s, qaku::Event e, bool broadcast);   // by value: signed in place when broadcast
+    // Receive-path debounce: mark a session dirty + arm m_flushTimer; flushDirty persists
+    // each dirty session once and publishes state once per burst.
+    void scheduleFlush(Session& s);
+    void flushDirty();
     std::string adminGuard();
     void publishState();
     void setStatus(const std::string& s);
@@ -211,6 +215,8 @@ private:
 
     std::recursive_mutex m_mtx;
     QTimer* m_hubTimer = nullptr;
+    QTimer* m_flushTimer = nullptr;              // single-shot 200 ms receive flush (see scheduleFlush)
+    std::set<std::string> m_dirty;               // session ids with received-but-unflushed events
     // Anti-storm throttles (ms since epoch of the last full-log re-serve). The
     // periodic hub resync and on-demand SYNC_REQ both re-broadcast the whole log;
     // without gating they amplified into a shard flood.

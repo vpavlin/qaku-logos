@@ -62,7 +62,13 @@ static std::string roleFor(const std::vector<qaku::Event>& log, const std::strin
     return "guest";
 }
 
-QakuCoreImpl::~QakuCoreImpl() { m_overlay.reset(); if (m_hubTimer) { m_hubTimer->stop(); m_hubTimer->deleteLater(); m_hubTimer = nullptr; } }
+QakuCoreImpl::~QakuCoreImpl() {
+    m_overlay.reset();
+    if (m_hubTimer) { m_hubTimer->stop(); m_hubTimer->deleteLater(); m_hubTimer = nullptr; }
+    if (m_flushTimer) { m_flushTimer->stop(); m_flushTimer->deleteLater(); m_flushTimer = nullptr; }
+    // Persist any received-but-not-yet-flushed events (the debounce window).
+    for (const auto& id : m_dirty) { auto it = m_sessions.find(id); if (it != m_sessions.end()) { try { savePersistedLog(it->second); } catch (...) {} } }
+}
 
 // ---- session registry ------------------------------------------------------
 QakuCoreImpl::Session& QakuCoreImpl::cur() { return m_sessions[m_current]; }
@@ -259,13 +265,21 @@ void QakuCoreImpl::onContextReady() {
         catchupRound();
     });
     m_hubTimer->start(15000);
+    // Receive-path debounce (see scheduleFlush). Same thread as the delivery callbacks.
+    m_flushTimer = new QTimer();
+    m_flushTimer->setSingleShot(true);
+    m_flushTimer->setInterval(200);
+    QObject::connect(m_flushTimer, &QTimer::timeout, [this]{
+        std::lock_guard<std::recursive_mutex> lk(m_mtx);
+        flushDirty();
+    });
     publishState();
 }
 
 std::string QakuCoreImpl::setSecret(std::string secretHex) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
     if (m_sessions.empty()) newSessionEntry();
-    try { applySecret(cur(), fromHex(secretHex), true); } catch (const std::exception& e) { return std::string("{\"error\":\"") + e.what() + "\"}"; }
+    try { applySecret(cur(), fromHex(secretHex), true); cur().fresh = false; } catch (const std::exception& e) { return std::string("{\"error\":\"") + e.what() + "\"}"; }
     publishState(); return snapshot();
 }
 std::string QakuCoreImpl::setDeviceId(std::string deviceId) {
@@ -315,6 +329,19 @@ void QakuCoreImpl::pushEvent(Session& s, Event e, bool broadcast) {
     // Sign our OWN events (broadcast) so they carry a verifiable secp256k1 author address
     // (parity with mobile). Received events (broadcast=false) keep their original signature.
     if (broadcast && m_signId.valid) qaku::signEvent(m_signId, e);
+    if (!broadcast) {
+        // RECEIVE path (a catch-up round can deliver hundreds of events back to back): no
+        // disk read, no re-sort of the whole log, no fold per event. Insert in HLC order and
+        // let one debounced flush (~200 ms) persist + publishState for the whole burst.
+        if (e.id.empty() || s.ids.count(e.id)) return;
+        s.ids.insert(e.id);
+        auto pos = std::upper_bound(s.log.begin(), s.log.end(), e,
+            [](const Event& x, const Event& y) { return qaku::compareHlc(x.hlc, y.hlc) < 0; });
+        s.log.insert(pos, e);
+        if (e.hlc.wall > s.wall) { s.wall = e.hlc.wall; s.ctr = e.hlc.ctr; }
+        scheduleFlush(s);
+        return;
+    }
     // Merge any on-disk events written by a concurrent instance BEFORE appending
     // (see loadPersistedLog) so this write can't clobber theirs. No-op if not
     // persisting or nothing new on disk.
@@ -324,12 +351,31 @@ void QakuCoreImpl::pushEvent(Session& s, Event e, bool broadcast) {
     s.log = qaku::mergeEvents(s.log, { e });
     if (e.hlc.wall > s.wall) { s.wall = e.hlc.wall; s.ctr = e.hlc.ctr; }
     savePersistedLog(s);   // rewrite <dir>/log.json (small; off any IPC hot path)
-    if (broadcast) {
-        // Our own new event: mark "queued" (durable) BEFORE sending; sealAndSend clears it
-        // once dispatched to the channel. If not connected yet it stays queued and the
-        // node-up reseed / periodic resync re-sends (and clears) it.
-        m_unpublished.insert(e.id); saveUnpublished();
-        sealAndSend(s, e);
+    // Our own new event: mark "queued" (durable) BEFORE sending; sealAndSend clears it
+    // once dispatched to the channel. If not connected yet it stays queued and the
+    // node-up reseed / periodic resync re-sends (and clears) it.
+    m_unpublished.insert(e.id); saveUnpublished();
+    sealAndSend(s, e);
+    publishState();
+}
+
+// Debounced receive flush. A burst of received events marks sessions dirty and arms ONE
+// single-shot timer; when it fires (200 ms after the first event of the burst - a
+// throttle, so a steady stream can't postpone it forever) each dirty session is merged
+// with disk once (multi-instance safety, see loadPersistedLog), written once, and the
+// view gets one publishState. Before the timer exists (onContextReady not run) flush now.
+void QakuCoreImpl::scheduleFlush(Session& s) {
+    m_dirty.insert(s.id);
+    if (!m_flushTimer) { flushDirty(); return; }
+    if (!m_flushTimer->isActive()) m_flushTimer->start();
+}
+void QakuCoreImpl::flushDirty() {
+    if (m_dirty.empty()) return;
+    std::set<std::string> dirty; dirty.swap(m_dirty);
+    for (const auto& id : dirty) {
+        auto it = m_sessions.find(id); if (it == m_sessions.end()) continue;   // deleted meanwhile
+        try { loadPersistedLog(it->second); savePersistedLog(it->second); }
+        catch (const std::exception& ex) { fprintf(stderr, "QAKU flush %s failed: %s\n", id.c_str(), ex.what()); }
     }
     publishState();
 }
