@@ -81,6 +81,16 @@ QakuCoreImpl::Session* QakuCoreImpl::sessionForTopic(const std::string& t) {
     for (auto& kv : m_sessions) if (kv.second.haveKey && kv.second.topic == t) return &kv.second;
     return nullptr;
 }
+// Boolean string args from the view / CLI: "false", "0", "no", "off" (any case, trimmed) are false;
+// anything else — including "" (the old default) — is true. Matching only the exact "false" made a CLI or a stray space flip a
+// close/unvote into its opposite.
+static bool argTrue(std::string v) {
+    auto b = v.find_first_not_of(" \t\r\n\""), e = v.find_last_not_of(" \t\r\n\"");
+    v = (b == std::string::npos) ? std::string() : v.substr(b, e - b + 1);
+    for (auto& c : v) c = (char)std::tolower((unsigned char)c);
+    return !(v == "false" || v == "0" || v == "no" || v == "off");
+}
+
 std::string QakuCoreImpl::newSessionId() {
     qaku::Bytes r(6); RAND_bytes(r.data(), 6); return "s" + qaku::toHex(r.data(), 6);
 }
@@ -411,7 +421,7 @@ std::string QakuCoreImpl::setOnStream(std::string questionId, std::string on) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
     if (questionId.empty()) return std::string("{\"error\":\"questionId required\"}");
     Session& s = cur();
-    if (on != "false") s.onStream.insert(questionId); else s.onStream.erase(questionId);
+    if (argTrue(on)) s.onStream.insert(questionId); else s.onStream.erase(questionId);
     saveOnStream(s);
     publishState();
     return snapshot();
@@ -790,11 +800,11 @@ std::string QakuCoreImpl::deleteQuestion(std::string questionId) {
 }
 std::string QakuCoreImpl::upvoteQuestion(std::string questionId, std::string up) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    pushEvent(cur(), mkEvent(qaku::T::UPVOTE, nextHlc(cur()), {{"targetType","question"},{"targetId", questionId},{"up", up!="false"},{"voter", m_myAddress}}), true); return snapshot();
+    pushEvent(cur(), mkEvent(qaku::T::UPVOTE, nextHlc(cur()), {{"targetType","question"},{"targetId", questionId},{"up", argTrue(up)},{"voter", m_myAddress}}), true); return snapshot();
 }
 std::string QakuCoreImpl::upvoteAnswer(std::string answerId, std::string up) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    pushEvent(cur(), mkEvent(qaku::T::UPVOTE, nextHlc(cur()), {{"targetType","answer"},{"targetId", answerId},{"up", up!="false"},{"voter", m_myAddress}}), true); return snapshot();
+    pushEvent(cur(), mkEvent(qaku::T::UPVOTE, nextHlc(cur()), {{"targetType","answer"},{"targetId", answerId},{"up", argTrue(up)},{"voter", m_myAddress}}), true); return snapshot();
 }
 
 // --- answers + moderation ---
@@ -805,11 +815,11 @@ std::string QakuCoreImpl::postAnswer(std::string questionId, std::string content
 }
 std::string QakuCoreImpl::acceptAnswer(std::string questionId, std::string answerId, std::string accepted) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;
-    pushEvent(cur(), mkEvent(qaku::T::ANSWER_ACCEPT, nextHlc(cur()), {{"questionId", questionId}, {"answerId", answerId}, {"accepted", accepted!="false"}}), true); return snapshot();
+    pushEvent(cur(), mkEvent(qaku::T::ANSWER_ACCEPT, nextHlc(cur()), {{"questionId", questionId}, {"answerId", answerId}, {"accepted", argTrue(accepted)}}), true); return snapshot();
 }
 std::string QakuCoreImpl::moderate(std::string questionId, std::string hidden) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;
-    pushEvent(cur(), mkEvent(qaku::T::MODERATE, nextHlc(cur()), {{"questionId", questionId}, {"hidden", hidden!="false"}}), true); return snapshot();
+    pushEvent(cur(), mkEvent(qaku::T::MODERATE, nextHlc(cur()), {{"questionId", questionId}, {"hidden", argTrue(hidden)}}), true); return snapshot();
 }
 
 // --- polls ---
@@ -837,11 +847,11 @@ std::string QakuCoreImpl::createPoll(std::string question, std::string optionsJs
     const std::string results = qaku::pollResults(settings);   // "always" unless "afterVote"
     qaku::Bytes r(6); RAND_bytes(r.data(), 6);
     pushEvent(cur(), mkEvent(qaku::T::POLL_CREATE, nextHlc(cur()), {{"pollId", qaku::toHex(r.data(),6)}, {"title", qaku::jstr(settings, "title")},
-        {"question", question}, {"options", opts}, {"active", active!="false"}, {"results", results}}), true); return snapshot();
+        {"question", question}, {"options", opts}, {"active", argTrue(active)}, {"results", results}}), true); return snapshot();
 }
 std::string QakuCoreImpl::setPollActive(std::string pollId, std::string active) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;
-    pushEvent(cur(), mkEvent(qaku::T::POLL_SET_ACTIVE, nextHlc(cur()), {{"pollId", pollId}, {"active", active!="false"}}), true); return snapshot();
+    pushEvent(cur(), mkEvent(qaku::T::POLL_SET_ACTIVE, nextHlc(cur()), {{"pollId", pollId}, {"active", argTrue(active)}}), true); return snapshot();
 }
 std::string QakuCoreImpl::deletePoll(std::string pollId) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;
