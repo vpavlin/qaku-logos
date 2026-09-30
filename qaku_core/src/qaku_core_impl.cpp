@@ -20,6 +20,13 @@
 using qaku::json;
 using qaku::Event;
 
+// Serialize a snapshot/state without ever throwing: a string that is not valid UTF-8
+// (e.g. a name cut mid-character by an older build) is replaced with U+FFFD instead of
+// making json::dump throw "incomplete UTF-8 string" out of publishState.
+static std::string safeDump(const json& j) {
+    return j.dump(-1, ' ', false, json::error_handler_t::replace);
+}
+
 static long long nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -80,6 +87,7 @@ QakuCoreImpl::Session& QakuCoreImpl::newSessionEntry() {
     m_order.push_back(id);
     qaku::Bytes secret(32); RAND_bytes(secret.data(), 32);
     applySecret(s, secret, true);   // writes pair.key
+    s.fresh = true;                 // untouched: createSession/joinSession may claim it
     m_current = id;
     saveSessions();
     return s;
@@ -155,9 +163,13 @@ void QakuCoreImpl::saveSessions() {
         auto it = m_sessions.find(id); if (it == m_sessions.end()) continue;
         const Session& s = it->second;
         std::string title;
-        json cs = qaku::computeState(s.log);
-        if (cs["session"].is_object()) title = cs["session"].value("title", "");
-        r.sessions.push_back({ s.id, title });
+        try {
+            json cs = qaku::computeState(s.log);
+            if (cs["session"].is_object()) title = qaku::jstr(cs["session"], "title");
+        } catch (const std::exception& ex) {
+            fprintf(stderr, "QAKU saveSessions: fold of %s failed: %s\n", s.id.c_str(), ex.what());
+        }
+        r.sessions.push_back({ s.id, title, s.fresh });
     }
     r.current = m_current;
     qaku::persist::writeRegistry(m_dataDir, r);
@@ -178,10 +190,18 @@ void QakuCoreImpl::loadSessions() {
             Session& s = m_sessions[e.id];
             s.id = e.id;
             s.dir = dir;
+            s.fresh = e.fresh;
             m_order.push_back(e.id);
-            applySecret(s, secret, false);        // derive identity/topic (key already on disk)
-            loadPersistedLog(s);
-            loadOnStream(s);
+            try {
+                applySecret(s, secret, false);        // derive identity/topic (key already on disk)
+                loadPersistedLog(s);
+                loadOnStream(s);
+            } catch (const std::exception& ex) {
+                // One unreadable session must not take the others (or the module) down.
+                fprintf(stderr, "QAKU loadSessions: skipping %s: %s\n", e.id.c_str(), ex.what());
+                m_sessions.erase(e.id);
+                m_order.pop_back();
+            }
         }
         if (!r.current.empty() && m_sessions.count(r.current)) m_current = r.current;
     }
@@ -218,7 +238,7 @@ void QakuCoreImpl::onContextReady() {
     if (const char* d = std::getenv("QAKU_DEVICE_ID")) m_deviceId = d;
     else if (!m_dataDir.empty()) { std::string p = qaku::persist::readDeviceId(m_dataDir); if (!p.empty()) m_deviceId = p; }
     loadOrCreateSignKey();   // our secp256k1 author identity (m_myAddress) — before any fold/authoring
-    if (!m_dataDir.empty()) { std::ifstream nf(m_dataDir + "/myname.txt"); if (nf) { std::getline(nf, m_myName); } }
+    if (!m_dataDir.empty()) { std::ifstream nf(m_dataDir + "/myname.txt"); if (nf) { std::getline(nf, m_myName); m_myName = qaku::utf8Clip(m_myName, qaku::NAME_MAX_CP); } }   // older builds cut at 40 BYTES: drop a split trailing char
     // Load persisted sessions (registry + each pair.key + log.json), or create a
     // fresh default session on first run. Replaces the old in-memory-only seed.
     loadSessions();
@@ -441,7 +461,7 @@ std::string QakuCoreImpl::overlayPayload() {
     }
     out["questions"] = qs;
     out["questionCount"] = (json::number_integer_t)qs.size();
-    return out.dump();
+    return safeDump(out);
     } catch (const std::exception& e) {
         // The overlay is a read-only convenience. It must never be able to take the
         // module down with it - an uncaught throw here is a crash of qaku_core, and
@@ -508,15 +528,19 @@ std::string QakuCoreImpl::setOverlay(std::string patchJson) {
 }
 
 void QakuCoreImpl::publishState() {
+    // Never let one malformed event break the session: the fold is tolerant (jstr/jbool),
+    // and anything that still throws keeps the LAST GOOD snapshot instead of unwinding
+    // into the IPC call / Qt slot (which took the module down).
+    try {
     // Current session detail (the main pane renders these top-level fields).
     json s = qaku::computeState(cur().log);
     // Tag each question with its local send state so the view can show a "queued" badge on
     // our own not-yet-published questions (evId = the source event id; see qaku_engine).
     if (s.contains("questions") && s["questions"].is_array())
         for (auto& q : s["questions"]) {
-            q["queued"] = m_unpublished.count(q.value("evId", "")) > 0;
+            q["queued"] = m_unpublished.count(qaku::jstr(q, "evId")) > 0;
             // Whether this question is currently on the OBS overlay.
-            q["onStream"] = cur().onStream.count(q.value("id", std::string())) > 0;
+            q["onStream"] = cur().onStream.count(qaku::jstr(q, "id")) > 0;
         }
     s["status"] = m_status;
     s["fingerprint"] = cur().haveKey ? cur().fingerprint : "";
@@ -543,16 +567,17 @@ void QakuCoreImpl::publishState() {
         auto it = m_sessions.find(id); if (it == m_sessions.end()) continue;
         const Session& e = it->second;
         if (e.log.empty()) continue;
-        json cs = qaku::computeState(e.log);
+        json cs;
+        try { cs = qaku::computeState(e.log); } catch (const std::exception&) { cs = json::object(); }   // one bad session must not hide the list
         std::string title;
         bool open = true;
-        if (cs["session"].is_object()) { title = cs["session"].value("title", ""); open = cs["session"].value("enabled", true); }
+        if (cs.is_object() && cs.contains("session") && cs["session"].is_object()) { title = qaku::jstr(cs["session"], "title"); open = qaku::jbool(cs["session"], "enabled", true); }
         sessions.push_back({
             {"id", e.id},
             {"title", title.empty() ? std::string("Untitled Q&A") : title},
             {"fingerprint", e.fingerprint},
             {"role", roleFor(e.log, m_myAddress)},
-            {"questions", cs.value("questionCount", (json::number_integer_t)0)},
+            {"questions", qaku::jget<json::number_integer_t>(cs, "questionCount", 0)},
             {"open", open},
             {"unread", 0},
             {"current", e.id == m_current}
@@ -566,16 +591,22 @@ void QakuCoreImpl::publishState() {
                      {"error", m_overlayError} };
     s["sync"] = { {"rxRaw", m_rxRaw}, {"rxSeen", m_rxSeen}, {"rxOpened", m_rxOpened},
                   {"rxOpenFail", m_rxOpenFail}, {"rxNew", m_rxNew}, {"rxDup", m_rxDup}, {"txTotal", m_txTotal} };
-    m_snapshot = s.dump();
+    m_snapshot = safeDump(s);
+    } catch (const std::exception& ex) {
+        fprintf(stderr, "QAKU publishState failed (keeping last snapshot): %s\n", ex.what());
+        return;
+    }
     emit stateChanged(m_snapshot);
 }
 
 std::string QakuCoreImpl::snapshot() {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
     // Lazily start delivery on the first read after the view attaches.
-    bool anyKey = false; for (auto& kv : m_sessions) if (kv.second.haveKey) { anyKey = true; break; }
-    if (anyKey && !m_nodeReady) bootstrapDelivery();
-    publishState();
+    try {
+        bool anyKey = false; for (auto& kv : m_sessions) if (kv.second.haveKey) { anyKey = true; break; }
+        if (anyKey && !m_nodeReady) bootstrapDelivery();
+    } catch (const std::exception& ex) { fprintf(stderr, "QAKU snapshot: bootstrap failed: %s\n", ex.what()); }
+    publishState();   // never throws (keeps the last good snapshot)
     return m_snapshot;
 }
 std::string QakuCoreImpl::resync() {
@@ -611,9 +642,12 @@ static Event mkEvent(const char* type, const qaku::HLC& hlc, json payload) {
 // --- multi-session lifecycle ---
 std::string QakuCoreImpl::createSession(std::string title, std::string description) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    // Reuse an empty current slot (the migrated default, or a freshly created one);
-    // otherwise mint a NEW session with a fresh secret and switch to it.
-    if (m_sessions.empty() || !cur().haveKey || !cur().log.empty()) newSessionEntry();
+    // Reuse the current slot ONLY if it is the untouched default (fresh: minted with a random
+    // secret, never joined/created). A joined-but-not-yet-synced room also has a key and an
+    // empty log - reusing that wrote our session.create into someone else's Q&A. Otherwise
+    // mint a NEW session with a fresh secret and switch to it.
+    if (m_sessions.empty() || !cur().haveKey || !cur().fresh || !cur().log.empty()) newSessionEntry();
+    cur().fresh = false;
     if (title.empty()) title = "Untitled Q&A";
     Event e = mkEvent(qaku::T::SESSION_CREATE, nextHlc(cur()), {{"sessionId", cur().fingerprint}, {"title", title}, {"description", description}});
     pushEvent(cur(), e, true);
@@ -629,7 +663,7 @@ void QakuCoreImpl::emitProfileSet(Session& s) {
 }
 std::string QakuCoreImpl::setName(std::string name) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    if (name.size() > 40) name = name.substr(0, 40);
+    name = qaku::utf8Clip(name, qaku::NAME_MAX_CP);   // code points, never a byte cut mid-character
     m_myName = name;
     if (!m_dataDir.empty()) { std::ofstream f(m_dataDir + "/myname.txt", std::ios::trunc); if (f) f << m_myName; }
     for (auto& kv : m_sessions) emitProfileSet(kv.second);   // re-announce on every joined Q&A
@@ -645,9 +679,11 @@ std::string QakuCoreImpl::joinSession(std::string secretHex) {
     try { topic = qaku::topicFor(qaku::deriveIdentity(s)); } catch (...) { return "{\"error\":\"invalid secret\"}"; }
     // Already hold this session? Switch instead of duplicating.
     for (auto& kv : m_sessions) if (kv.second.haveKey && kv.second.topic == topic) { m_current = kv.first; saveSessions(); return snapshot(); }
-    // Reuse an empty current slot, else a fresh entry, keyed to the shared secret.
-    Session* target = (!m_sessions.empty() && cur().haveKey && cur().log.empty()) ? &cur() : &newSessionEntry();
+    // Reuse the current slot only if it is the untouched default (see createSession) - never
+    // a joined/created one, whose pair.key this would overwrite. Else a fresh entry.
+    Session* target = (!m_sessions.empty() && cur().fresh && cur().log.empty()) ? &cur() : &newSessionEntry();
     applySecret(*target, s, true);   // writes the joined session's pair.key
+    target->fresh = false;
     m_current = target->id;
     emitProfileSet(*target);   // announce our display name on the joined topic
     saveSessions();

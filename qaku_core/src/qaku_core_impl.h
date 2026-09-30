@@ -116,6 +116,9 @@ private:
         std::string dir;               // on-disk dir (m_dataDir + "/" + id); "" = not persisting
         bool haveKey = false;
         bool subscribed = false;
+        // The untouched default slot (random secret, never created/joined into). Only a
+        // fresh slot may be reused by createSession/joinSession. Persisted in sessions.json.
+        bool fresh = false;
         // Question ids the host has put on the stream overlay. Deliberately NOT an
         // event: this is a local presentation choice, and pushing it through the log
         // would broadcast the host's stream direction to every participant.

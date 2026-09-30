@@ -56,7 +56,8 @@ inline void writeLog(const std::string& dir, const std::vector<Event>& log) {
     json arr = json::array();
     for (const auto& e : log) arr.push_back(eventToJson(e));
     std::ofstream f(dir + "/log.json");
-    if (f) f << arr.dump();
+    // replace, not throw, on invalid UTF-8: a persist failure must never unwind the caller.
+    if (f) f << arr.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 // Reads the log; a missing/corrupt file yields an empty vector (never throws).
 inline std::vector<Event> readLog(const std::string& dir) {
@@ -75,17 +76,22 @@ inline std::vector<Event> readLog(const std::string& dir) {
 }
 
 // --- sessions.json : the registry (display order + titles + current selection) --
-struct RegEntry { std::string id, title; };
+// fresh = the untouched default slot (never created/joined into); see Session::fresh.
+struct RegEntry { std::string id, title; bool fresh = false; };
 struct Registry  { std::vector<RegEntry> sessions; std::string current; };
 
 inline void writeRegistry(const std::string& root, const Registry& r) {
     if (root.empty()) return;
     std::error_code ec; std::filesystem::create_directories(root, ec);
     json arr = json::array();
-    for (const auto& e : r.sessions) arr.push_back({{"id", e.id}, {"title", e.title}});
+    for (const auto& e : r.sessions) {
+        json o = {{"id", e.id}, {"title", e.title}};
+        if (e.fresh) o["fresh"] = true;
+        arr.push_back(o);
+    }
     json reg = {{"sessions", arr}, {"current", r.current}};
     std::ofstream f(root + "/sessions.json");
-    if (f) f << reg.dump(2);
+    if (f) f << reg.dump(2, ' ', false, json::error_handler_t::replace);
 }
 inline Registry readRegistry(const std::string& root) {
     Registry r;
@@ -97,9 +103,11 @@ inline Registry readRegistry(const std::string& root) {
     if (!j.is_object() || !j.contains("sessions") || !j["sessions"].is_array()) return r;
     for (auto& e : j["sessions"]) {
         if (!e.is_object() || !e.contains("id")) continue;
-        r.sessions.push_back({ e.value("id", std::string()), e.value("title", std::string()) });
+        auto str = [&](const char* k) { auto it = e.find(k); return (it != e.end() && it->is_string()) ? it->get<std::string>() : std::string(); };
+        auto fr = e.find("fresh");
+        r.sessions.push_back({ str("id"), str("title"), fr != e.end() && fr->is_boolean() && fr->get<bool>() });
     }
-    r.current = j.value("current", std::string());
+    r.current = (j.contains("current") && j["current"].is_string()) ? j["current"].get<std::string>() : std::string();
     return r;
 }
 
