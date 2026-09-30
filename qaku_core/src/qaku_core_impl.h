@@ -80,8 +80,13 @@ public:
     std::string clearOnStream();
 
     // --- polls ---
-    std::string createPoll(std::string question, std::string optionsJson, std::string active);
+    // optionsJson = ["Yes","No"] or [{"id":"o1","title":"Yes"},...] (ids minted when missing;
+    // >= 2 non-empty options). active = "true"/"false". settingsJson = {"title":"...",
+    // "results":"always"|"afterVote"} ("" or {} = untitled, results always). Owner/admin only.
+    std::string createPoll(std::string question, std::string optionsJson, std::string active, std::string settingsJson);
     std::string setPollActive(std::string pollId, std::string active);
+    std::string deletePoll(std::string pollId);
+    // One live vote per identity (a later vote replaces ours); ignored while the poll is closed.
     std::string votePoll(std::string pollId, std::string optionId);
 
     // --- sync / pairing ---

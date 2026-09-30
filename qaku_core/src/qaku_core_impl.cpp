@@ -578,8 +578,9 @@ void QakuCoreImpl::publishState() {
     // and anything that still throws keeps the LAST GOOD snapshot instead of unwinding
     // into the IPC call / Qt slot (which took the module down).
     try {
-    // Current session detail (the main pane renders these top-level fields).
-    json s = qaku::computeState(cur().log);
+    // Current session detail (the main pane renders these top-level fields). Folded as
+    // this device's identity so each poll carries myVote (our live optionId, or null).
+    json s = qaku::computeState(cur().log, m_myAddress);
     // Tag each question with its local send state so the view can show a "queued" badge on
     // our own not-yet-published questions (evId = the source event id; see qaku_engine).
     if (s.contains("questions") && s["questions"].is_array())
@@ -812,15 +813,39 @@ std::string QakuCoreImpl::moderate(std::string questionId, std::string hidden) {
 }
 
 // --- polls ---
-std::string QakuCoreImpl::createPoll(std::string question, std::string optionsJson, std::string active) {
+// Options are normalized to [{id,title}] before signing: the fold drops an id-less option,
+// so a bare ["Yes","No"] from the view would otherwise create a poll nobody can vote on.
+// title and results are always written as plain strings (never null) so the signed payload
+// round-trips byte-identically on every peer.
+std::string QakuCoreImpl::createPoll(std::string question, std::string optionsJson, std::string active, std::string settingsJson) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;
-    json opts; try { opts = json::parse(optionsJson); } catch (...) { return "{\"error\":\"bad options json\"}"; }
+    if (question.empty()) return "{\"error\":\"poll question required\"}";
+    json in; try { in = json::parse(optionsJson); } catch (...) { return "{\"error\":\"bad options json\"}"; }
+    if (!in.is_array()) return "{\"error\":\"options must be an array\"}";
+    json opts = json::array(); std::set<std::string> seen;
+    for (const auto& o : in) {
+        std::string title = o.is_string() ? o.get<std::string>() : qaku::jstr(o, "title");
+        std::string id = o.is_object() ? qaku::jstr(o, "id") : std::string();
+        if (title.empty()) continue;
+        if (id.empty() || seen.count(id)) { qaku::Bytes r(4); RAND_bytes(r.data(), 4); id = qaku::toHex(r.data(), 4); }
+        seen.insert(id);
+        opts.push_back({{"id", id}, {"title", title}});
+    }
+    if (opts.size() < 2) return "{\"error\":\"a poll needs at least 2 options\"}";
+    json settings = json::object();
+    if (!settingsJson.empty()) { try { settings = json::parse(settingsJson); } catch (...) { return "{\"error\":\"bad settings json\"}"; } }
+    const std::string results = qaku::pollResults(settings);   // "always" unless "afterVote"
     qaku::Bytes r(6); RAND_bytes(r.data(), 6);
-    pushEvent(cur(), mkEvent(qaku::T::POLL_CREATE, nextHlc(cur()), {{"pollId", qaku::toHex(r.data(),6)}, {"question", question}, {"options", opts}, {"active", active!="false"}}), true); return snapshot();
+    pushEvent(cur(), mkEvent(qaku::T::POLL_CREATE, nextHlc(cur()), {{"pollId", qaku::toHex(r.data(),6)}, {"title", qaku::jstr(settings, "title")},
+        {"question", question}, {"options", opts}, {"active", active!="false"}, {"results", results}}), true); return snapshot();
 }
 std::string QakuCoreImpl::setPollActive(std::string pollId, std::string active) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;
     pushEvent(cur(), mkEvent(qaku::T::POLL_SET_ACTIVE, nextHlc(cur()), {{"pollId", pollId}, {"active", active!="false"}}), true); return snapshot();
+}
+std::string QakuCoreImpl::deletePoll(std::string pollId) {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;
+    pushEvent(cur(), mkEvent(qaku::T::POLL_DELETE, nextHlc(cur()), {{"pollId", pollId}}), true); return snapshot();
 }
 std::string QakuCoreImpl::votePoll(std::string pollId, std::string optionId) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
