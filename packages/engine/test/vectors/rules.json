@@ -1,0 +1,886 @@
+[
+ {
+  "name": "upvote/poll voter is the author, payload.voter ignored",
+  "events": [
+   {
+    "v": 1,
+    "id": "e-create",
+    "type": "session.create",
+    "hlc": {
+     "wall": 1,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "sessionId": "sess",
+     "title": "Town Hall",
+     "description": ""
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-q1",
+    "type": "question.add",
+    "hlc": {
+     "wall": 10,
+     "ctr": 0,
+     "dev": "A"
+    },
+    "dev": "A",
+    "payload": {
+     "questionId": "q1",
+     "content": "hello"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-u1",
+    "type": "upvote",
+    "hlc": {
+     "wall": 20,
+     "ctr": 0,
+     "dev": "B"
+    },
+    "dev": "B",
+    "payload": {
+     "targetType": "question",
+     "targetId": "q1",
+     "up": true,
+     "voter": "X1"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-u2",
+    "type": "upvote",
+    "hlc": {
+     "wall": 21,
+     "ctr": 0,
+     "dev": "B"
+    },
+    "dev": "B",
+    "payload": {
+     "targetType": "question",
+     "targetId": "q1",
+     "up": true,
+     "voter": "X2"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-u3",
+    "type": "upvote",
+    "hlc": {
+     "wall": 22,
+     "ctr": 0,
+     "dev": "B"
+    },
+    "dev": "B",
+    "payload": {
+     "targetType": "question",
+     "targetId": "q1",
+     "up": true,
+     "voter": "X3"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-u4",
+    "type": "upvote",
+    "hlc": {
+     "wall": 23,
+     "ctr": 0,
+     "dev": "C"
+    },
+    "dev": "C",
+    "payload": {
+     "targetType": "question",
+     "targetId": "q1",
+     "up": true,
+     "voter": "B"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-u5",
+    "type": "upvote",
+    "hlc": {
+     "wall": 24,
+     "ctr": 0,
+     "dev": "C"
+    },
+    "dev": "C",
+    "payload": {
+     "targetType": "question",
+     "targetId": "q1",
+     "up": false
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-p1",
+    "type": "poll.create",
+    "hlc": {
+     "wall": 30,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "pollId": "p1",
+     "question": "Pick",
+     "options": [
+      {
+       "id": "o1",
+       "title": "A"
+      },
+      {
+       "id": "o2",
+       "title": "B"
+      }
+     ],
+     "active": true
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-v1",
+    "type": "poll.vote",
+    "hlc": {
+     "wall": 40,
+     "ctr": 0,
+     "dev": "C"
+    },
+    "dev": "C",
+    "payload": {
+     "pollId": "p1",
+     "optionId": "o1",
+     "voter": "Y1"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-v2",
+    "type": "poll.vote",
+    "hlc": {
+     "wall": 41,
+     "ctr": 0,
+     "dev": "C"
+    },
+    "dev": "C",
+    "payload": {
+     "pollId": "p1",
+     "optionId": "o2",
+     "voter": "Y2"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-v3",
+    "type": "poll.vote",
+    "hlc": {
+     "wall": 42,
+     "ctr": 0,
+     "dev": "D"
+    },
+    "dev": "D",
+    "payload": {
+     "pollId": "p1",
+     "optionId": "o1",
+     "voter": "C"
+    }
+   }
+  ],
+  "expect": {
+   "session": {
+    "id": "sess",
+    "title": "Town Hall",
+    "description": "",
+    "enabled": true,
+    "moderationEnabled": false
+   },
+   "owner": "S",
+   "admins": [
+    "S"
+   ],
+   "names": {},
+   "questions": [
+    {
+     "id": "q1",
+     "content": "hello",
+     "author": "A",
+     "moderated": false,
+     "acceptedAnswerId": null,
+     "upvotes": 1,
+     "upvoters": [
+      "B"
+     ],
+     "answers": []
+    }
+   ],
+   "polls": [
+    {
+     "id": "p1",
+     "title": "",
+     "question": "Pick",
+     "options": [
+      {
+       "id": "o1",
+       "title": "A"
+      },
+      {
+       "id": "o2",
+       "title": "B"
+      }
+     ],
+     "active": true,
+     "tally": {
+      "o1": 1,
+      "o2": 1
+     },
+     "votes": 2
+    }
+   ],
+   "eventCount": 11
+  }
+ },
+ {
+  "name": "first question.add wins; creatorOf is the first writer",
+  "events": [
+   {
+    "v": 1,
+    "id": "e-create",
+    "type": "session.create",
+    "hlc": {
+     "wall": 1,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "sessionId": "sess",
+     "title": "Town Hall",
+     "description": ""
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-qa",
+    "type": "question.add",
+    "hlc": {
+     "wall": 10,
+     "ctr": 0,
+     "dev": "A"
+    },
+    "dev": "A",
+    "payload": {
+     "questionId": "q1",
+     "content": "original"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-qm",
+    "type": "question.add",
+    "hlc": {
+     "wall": 20,
+     "ctr": 0,
+     "dev": "M"
+    },
+    "dev": "M",
+    "payload": {
+     "questionId": "q1",
+     "content": "hijacked",
+     "author": "A"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-em",
+    "type": "question.edit",
+    "hlc": {
+     "wall": 30,
+     "ctr": 0,
+     "dev": "M"
+    },
+    "dev": "M",
+    "payload": {
+     "questionId": "q1",
+     "content": "edited by M"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-dm",
+    "type": "question.delete",
+    "hlc": {
+     "wall": 31,
+     "ctr": 0,
+     "dev": "M"
+    },
+    "dev": "M",
+    "payload": {
+     "questionId": "q1"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-ea",
+    "type": "question.edit",
+    "hlc": {
+     "wall": 40,
+     "ctr": 0,
+     "dev": "A"
+    },
+    "dev": "A",
+    "payload": {
+     "questionId": "q1",
+     "content": "edited by A"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-an1",
+    "type": "answer.post",
+    "hlc": {
+     "wall": 50,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "answerId": "a1",
+     "questionId": "q1",
+     "content": "first answer"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-an2",
+    "type": "answer.post",
+    "hlc": {
+     "wall": 51,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "answerId": "a1",
+     "questionId": "q1",
+     "content": "dup answer"
+    }
+   }
+  ],
+  "expect": {
+   "session": {
+    "id": "sess",
+    "title": "Town Hall",
+    "description": "",
+    "enabled": true,
+    "moderationEnabled": false
+   },
+   "owner": "S",
+   "admins": [
+    "S"
+   ],
+   "names": {},
+   "questions": [
+    {
+     "id": "q1",
+     "content": "edited by A",
+     "author": "A",
+     "moderated": false,
+     "acceptedAnswerId": null,
+     "upvotes": 0,
+     "upvoters": [],
+     "answers": [
+      {
+       "id": "a1",
+       "content": "first answer",
+       "author": "S",
+       "accepted": false,
+       "upvoters": []
+      }
+     ]
+    }
+   ],
+   "polls": [],
+   "eventCount": 6
+  }
+ },
+ {
+  "name": "malformed payloads never throw and fold identically",
+  "events": [
+   {
+    "v": 1,
+    "id": "e-create",
+    "type": "session.create",
+    "hlc": {
+     "wall": 1,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "sessionId": "sess",
+     "title": "Town Hall",
+     "description": ""
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-cfg",
+    "type": "session.config",
+    "hlc": {
+     "wall": 5,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "title": 42,
+     "description": null,
+     "enabled": "no",
+     "moderationEnabled": true
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-p1",
+    "type": "poll.create",
+    "hlc": {
+     "wall": 10,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "pollId": "p1",
+     "question": "bad options",
+     "options": "not-an-array",
+     "active": "yes"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-p2",
+    "type": "poll.create",
+    "hlc": {
+     "wall": 11,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "pollId": "p2",
+     "question": 7,
+     "options": [
+      null,
+      5,
+      "x",
+      [
+       1
+      ],
+      {
+       "id": "o1",
+       "title": "ok"
+      },
+      {
+       "title": "no id"
+      }
+     ]
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-v1",
+    "type": "poll.vote",
+    "hlc": {
+     "wall": 12,
+     "ctr": 0,
+     "dev": "C"
+    },
+    "dev": "C",
+    "payload": {
+     "pollId": "p2",
+     "optionId": "o1"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-v2",
+    "type": "poll.vote",
+    "hlc": {
+     "wall": 13,
+     "ctr": 0,
+     "dev": "D"
+    },
+    "dev": "D",
+    "payload": {
+     "pollId": "p2",
+     "optionId": 99
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-v3",
+    "type": "poll.vote",
+    "hlc": {
+     "wall": 14,
+     "ctr": 0,
+     "dev": "F"
+    },
+    "dev": "F",
+    "payload": {
+     "pollId": "p2",
+     "optionId": "constructor"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-q1",
+    "type": "question.add",
+    "hlc": {
+     "wall": 20,
+     "ctr": 0,
+     "dev": "A"
+    },
+    "dev": "A",
+    "payload": {
+     "questionId": "q1",
+     "content": 42
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-q2",
+    "type": "question.add",
+    "hlc": {
+     "wall": 21,
+     "ctr": 0,
+     "dev": "B"
+    },
+    "dev": "B",
+    "payload": {
+     "questionId": "q2",
+     "content": {
+      "x": 1
+     },
+     "author": 7
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-q3",
+    "type": "question.add",
+    "hlc": {
+     "wall": 22,
+     "ctr": 0,
+     "dev": "C"
+    },
+    "dev": "C",
+    "payload": "a string payload"
+   },
+   {
+    "v": 1,
+    "id": "e-q4",
+    "type": "question.add",
+    "hlc": {
+     "wall": 23,
+     "ctr": 0,
+     "dev": "D"
+    },
+    "dev": "D",
+    "payload": {
+     "questionId": "q4",
+     "content": "fine"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-ed",
+    "type": "question.edit",
+    "hlc": {
+     "wall": 24,
+     "ctr": 0,
+     "dev": "D"
+    },
+    "dev": "D",
+    "payload": {
+     "questionId": "q4",
+     "content": [
+      "not",
+      "a",
+      "string"
+     ]
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-u1",
+    "type": "upvote",
+    "hlc": {
+     "wall": 25,
+     "ctr": 0,
+     "dev": "B"
+    },
+    "dev": "B",
+    "payload": {
+     "targetId": "q4",
+     "up": "yes"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-u2",
+    "type": "upvote",
+    "hlc": {
+     "wall": 26,
+     "ctr": 0,
+     "dev": "C"
+    },
+    "dev": "C",
+    "payload": {
+     "targetId": 5,
+     "up": true
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-mod",
+    "type": "moderate",
+    "hlc": {
+     "wall": 27,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "questionId": "q1",
+     "hidden": 1
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-acc",
+    "type": "answer.accept",
+    "hlc": {
+     "wall": 28,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "questionId": "q4",
+     "answerId": 3,
+     "accepted": "true"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-n1",
+    "type": "profile.set",
+    "hlc": {
+     "wall": 30,
+     "ctr": 0,
+     "dev": "A"
+    },
+    "dev": "A",
+    "payload": {
+     "name": 12345
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-n2",
+    "type": "profile.set",
+    "hlc": {
+     "wall": 31,
+     "ctr": 0,
+     "dev": "B"
+    },
+    "dev": "B",
+    "payload": {
+     "name": null
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-adm",
+    "type": "admin.add",
+    "hlc": {
+     "wall": 32,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "memberId": {
+      "evil": true
+     }
+    }
+   }
+  ],
+  "expect": {
+   "session": {
+    "id": "sess",
+    "title": "Town Hall",
+    "description": "",
+    "enabled": true,
+    "moderationEnabled": true
+   },
+   "owner": "S",
+   "admins": [
+    "S"
+   ],
+   "names": {},
+   "questions": [
+    {
+     "id": "q4",
+     "content": "fine",
+     "author": "D",
+     "moderated": false,
+     "acceptedAnswerId": null,
+     "upvotes": 1,
+     "upvoters": [
+      "B"
+     ],
+     "answers": []
+    },
+    {
+     "id": "q1",
+     "content": "",
+     "author": "A",
+     "moderated": true,
+     "acceptedAnswerId": null,
+     "upvotes": 0,
+     "upvoters": [],
+     "answers": []
+    },
+    {
+     "id": "q2",
+     "content": "",
+     "author": "B",
+     "moderated": false,
+     "acceptedAnswerId": null,
+     "upvotes": 0,
+     "upvoters": [],
+     "answers": []
+    }
+   ],
+   "polls": [
+    {
+     "id": "p1",
+     "title": "",
+     "question": "bad options",
+     "options": [],
+     "active": false,
+     "tally": {},
+     "votes": 0
+    },
+    {
+     "id": "p2",
+     "title": "",
+     "question": "",
+     "options": [
+      {
+       "id": "o1",
+       "title": "ok"
+      }
+     ],
+     "active": false,
+     "tally": {
+      "o1": 1
+     },
+     "votes": 1
+    }
+   ],
+   "eventCount": 19
+  }
+ },
+ {
+  "name": "display names are clipped to 40 code points, never mid-character",
+  "events": [
+   {
+    "v": 1,
+    "id": "e-create",
+    "type": "session.create",
+    "hlc": {
+     "wall": 1,
+     "ctr": 0,
+     "dev": "S"
+    },
+    "dev": "S",
+    "payload": {
+     "sessionId": "sess",
+     "title": "Town Hall",
+     "description": ""
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-n1",
+    "type": "profile.set",
+    "hlc": {
+     "wall": 10,
+     "ctr": 0,
+     "dev": "A"
+    },
+    "dev": "A",
+    "payload": {
+     "name": "ééééééééééééééééééééééééééééééééééééééééééééé"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-n2",
+    "type": "profile.set",
+    "hlc": {
+     "wall": 11,
+     "ctr": 0,
+     "dev": "B"
+    },
+    "dev": "B",
+    "payload": {
+     "name": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    }
+   },
+   {
+    "v": 1,
+    "id": "e-n3",
+    "type": "profile.set",
+    "hlc": {
+     "wall": 12,
+     "ctr": 0,
+     "dev": "C"
+    },
+    "dev": "C",
+    "payload": {
+     "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx😀😀"
+    }
+   }
+  ],
+  "expect": {
+   "session": {
+    "id": "sess",
+    "title": "Town Hall",
+    "description": "",
+    "enabled": true,
+    "moderationEnabled": false
+   },
+   "owner": "S",
+   "admins": [
+    "S"
+   ],
+   "names": {
+    "A": "éééééééééééééééééééééééééééééééééééééééé",
+    "B": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "C": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx😀"
+   },
+   "questions": [],
+   "polls": [],
+   "eventCount": 4
+  }
+ }
+]

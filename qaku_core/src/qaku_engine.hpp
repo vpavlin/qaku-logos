@@ -56,6 +56,66 @@ namespace T {
     constexpr const char* PROFILE_SET    = "profile.set";   // self-scoped display name (participant)
 }
 
+// ---- tolerant payload reads ------------------------------------------------
+// A payload is whatever a peer put on the wire (old client, bug, or hostile writer).
+// nlohmann's value(k, def) only falls back when the key is MISSING: a present-but-null
+// or wrong-typed field throws type_error, and one such event threw out of the fold on
+// every publishState -> the session (and the module) was dead. jget returns `def` when
+// the payload is not an object or the field is missing / null / the wrong type. Same
+// typing as str()/bool() in engine.mjs (a string field only accepts a JSON string, a
+// bool field only a JSON bool), so both engines read the same value from the same bytes.
+template <class T>
+inline T jget(const json& j, const char* k, T def) {
+    if (!j.is_object()) return def;
+    auto it = j.find(k);
+    if (it == j.end() || it->is_null()) return def;
+    try { return it->template get<T>(); } catch (const json::exception&) { return def; }
+}
+inline std::string jstr(const json& j, const char* k, const std::string& def = std::string()) {
+    if (!j.is_object()) return def;
+    auto it = j.find(k);
+    return (it != j.end() && it->is_string()) ? it->get<std::string>() : def;
+}
+inline bool jbool(const json& j, const char* k, bool def) {
+    if (!j.is_object()) return def;
+    auto it = j.find(k);
+    return (it != j.end() && it->is_boolean()) ? it->get<bool>() : def;
+}
+
+// Cut a UTF-8 string to at most maxCp code points, never mid-sequence. Invalid bytes
+// (e.g. a name an older build already cut at 40 BYTES, leaving half an emoji in
+// myname.txt) are dropped, so the result is always valid UTF-8 and json::dump can't
+// throw "incomplete UTF-8". For valid input this equals the JS [...s].slice(0, n).
+inline std::string utf8Clip(const std::string& in, size_t maxCp) {
+    std::string out; size_t cps = 0, i = 0, n = in.size();
+    while (i < n && cps < maxCp) {
+        unsigned char c = (unsigned char)in[i];
+        size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        bool ok = len > 0 && i + len <= n;
+        for (size_t k = 1; ok && k < len; k++) ok = ((unsigned char)in[i + k] & 0xC0) == 0x80;
+        if (ok && len == 2) ok = c >= 0xC2;                                    // no overlong 2-byte
+        if (ok && len == 3) { unsigned char c1 = (unsigned char)in[i + 1];
+            ok = !(c == 0xE0 && c1 < 0xA0) && !(c == 0xED && c1 >= 0xA0); }    // no overlong, no surrogates
+        if (ok && len == 4) { unsigned char c1 = (unsigned char)in[i + 1];
+            ok = c <= 0xF4 && !(c == 0xF0 && c1 < 0x90) && !(c == 0xF4 && c1 >= 0x90); }
+        if (!ok) { i += 1; continue; }                                         // drop a stray byte
+        out.append(in, i, len); i += len; cps++;
+    }
+    return out;
+}
+constexpr size_t NAME_MAX_CP = 40;   // display-name cap, in code points (engine.mjs NAME_MAX)
+
+// Poll options: an array of objects with a non-empty string id; anything else is dropped
+// (engine.mjs optionsOf).
+inline json pollOptions(const json& p) {
+    json out = json::array();
+    if (!p.is_object()) return out;
+    auto it = p.find("options");
+    if (it == p.end() || !it->is_array()) return out;
+    for (const auto& o : *it) if (o.is_object() && !jstr(o, "id").empty()) out.push_back(o);
+    return out;
+}
+
 // mergeEvents / compareHlc are now logos_sync::mergeEvents / compareHlc (aliased
 // above) — union-by-id + HLC sort, idempotent, byte-identical to QAKU's original.
 
@@ -75,14 +135,17 @@ inline Admission admitEvents(const std::vector<Event>& evs) {
     for (const auto& e : ordered) {
         if (e.type != T::ADMIN_ADD && e.type != T::ADMIN_REMOVE) continue;
         if (!admins.count(e.hlc.dev)) continue;
-        std::string m = e.payload.value("memberId", "");
-        if (e.type == T::ADMIN_ADD) admins.insert(m);
+        std::string m = jstr(e.payload, "memberId");
+        if (e.type == T::ADMIN_ADD) { if (!m.empty()) admins.insert(m); }
         else if (m != A.owner) admins.erase(m);
     }
+    // Creator = FIRST writer of the id (earliest in HLC order; emplace keeps the first),
+    // so a later question.add reusing someone's questionId can't claim edit/delete on it.
     std::map<std::string, std::string> creatorOf;
     for (const auto& e : ordered) {
-        if (e.type == T::QUESTION_ADD) creatorOf[e.payload.value("questionId","")] = e.hlc.dev;
-        else if (e.type == T::ANSWER_POST) creatorOf[e.payload.value("answerId","")] = e.hlc.dev;
+        std::string id = e.type == T::QUESTION_ADD ? jstr(e.payload, "questionId")
+                       : e.type == T::ANSWER_POST ? jstr(e.payload, "answerId") : std::string();
+        if (!id.empty()) creatorOf.emplace(id, e.hlc.dev);
     }
     auto isMod = [](const std::string& t){
         return t==T::SESSION_CONFIG||t==T::ANSWER_POST||t==T::ANSWER_EDIT||t==T::ANSWER_DELETE||
@@ -95,7 +158,7 @@ inline Admission admitEvents(const std::vector<Event>& evs) {
         if (e.type == T::ADMIN_ADD || e.type == T::ADMIN_REMOVE) { if (admins.count(author)) A.admitted.push_back(e); continue; }
         if (isMod(e.type)) { if (admins.count(author)) A.admitted.push_back(e); continue; }
         if (e.type == T::QUESTION_EDIT || e.type == T::QUESTION_DELETE) {
-            auto it = creatorOf.find(e.payload.value("questionId",""));
+            auto it = creatorOf.find(jstr(e.payload, "questionId"));
             if (admins.count(author) || (it != creatorOf.end() && it->second == author)) A.admitted.push_back(e);
             continue;
         }
@@ -125,53 +188,63 @@ inline json computeState(const std::vector<Event>& evs) {
     std::map<std::string, std::map<std::string,bool>> up;
 
     for (const auto& e : ordered) {
-        const json& p = e.payload;
+        const json& p = e.payload;   // may be any JSON type: every read below is jstr/jbool/typed
         const std::string& t = e.type;
         if (t == T::SESSION_CREATE) {
             if (!haveSession) { haveSession=true; session = {
-                {"id", p.value("sessionId","")}, {"title", p.value("title","")},
-                {"description", p.value("description","")}, {"owner", e.hlc.dev},
+                {"id", jstr(p,"sessionId")}, {"title", jstr(p,"title")},
+                {"description", jstr(p,"description")}, {"owner", e.hlc.dev},
                 {"enabled", true}, {"moderationEnabled", false}, {"createdAt", e.hlc.wall} }; }
         } else if (t == T::SESSION_CONFIG) {
-            if (haveSession) {
-                if (p.contains("title") && !p["title"].is_null()) session["title"]=p["title"];
-                if (p.contains("description") && !p["description"].is_null()) session["description"]=p["description"];
-                if (p.contains("enabled") && !p["enabled"].is_null()) session["enabled"]=p["enabled"];
-                if (p.contains("moderationEnabled") && !p["moderationEnabled"].is_null()) session["moderationEnabled"]=p["moderationEnabled"];
+            if (haveSession && p.is_object()) {   // typed fields only; a wrong-typed field is ignored
+                if (p.contains("title") && p["title"].is_string()) session["title"]=p["title"];
+                if (p.contains("description") && p["description"].is_string()) session["description"]=p["description"];
+                if (p.contains("enabled") && p["enabled"].is_boolean()) session["enabled"]=p["enabled"];
+                if (p.contains("moderationEnabled") && p["moderationEnabled"].is_boolean()) session["moderationEnabled"]=p["moderationEnabled"];
             }
         } else if (t == T::QUESTION_ADD) {
-            std::string id = p.value("questionId","");
-            if (!questions.count(id)) { questions[id] = QV{id, e.id, p.value("content",""), p.value("author", e.hlc.dev), e.hlc.wall, false, "", false}; qOrder.push_back(id); }
+            // FIRST question.add for an id wins; a later duplicate is ignored.
+            std::string id = jstr(p,"questionId");
+            std::string author = jstr(p,"author"); if (author.empty()) author = e.hlc.dev;
+            if (!id.empty() && !questions.count(id)) { questions[id] = QV{id, e.id, jstr(p,"content"), author, e.hlc.wall, false, "", false}; qOrder.push_back(id); }
         } else if (t == T::QUESTION_EDIT) {
-            auto it = questions.find(p.value("questionId","")); if (it!=questions.end() && p.contains("content")) it->second.content = p["content"];
+            auto it = questions.find(jstr(p,"questionId")); if (it!=questions.end() && p.is_object() && p.contains("content") && p["content"].is_string()) it->second.content = p["content"].get<std::string>();
         } else if (t == T::QUESTION_DELETE) {
-            auto it = questions.find(p.value("questionId","")); if (it!=questions.end()) it->second.deleted = true;
+            auto it = questions.find(jstr(p,"questionId")); if (it!=questions.end()) it->second.deleted = true;
         } else if (t == T::MODERATE) {
-            auto it = questions.find(p.value("questionId","")); if (it!=questions.end()) it->second.moderated = p.value("hidden", true);
+            auto it = questions.find(jstr(p,"questionId")); if (it!=questions.end()) it->second.moderated = jbool(p,"hidden", true);
         } else if (t == T::UPVOTE) {
-            up[p.value("targetId","")][p.value("voter", e.hlc.dev)] = p.value("up", true);
+            // The voter IS the author (hlc.dev); payload.voter is ignored (it let one writer
+            // vote as any number of made-up voters).
+            up[jstr(p,"targetId")][e.hlc.dev] = jbool(p,"up", true);
         } else if (t == T::ANSWER_POST) {
-            std::string id = p.value("answerId","");
-            if (!answers.count(id)) { answers[id] = AV{id, e.id, p.value("questionId",""), p.value("content",""), p.value("author", e.hlc.dev), e.hlc.wall, false, false}; aOrder.push_back(id); }
+            std::string id = jstr(p,"answerId");
+            std::string author = jstr(p,"author"); if (author.empty()) author = e.hlc.dev;
+            if (!id.empty() && !answers.count(id)) { answers[id] = AV{id, e.id, jstr(p,"questionId"), jstr(p,"content"), author, e.hlc.wall, false, false}; aOrder.push_back(id); }
         } else if (t == T::ANSWER_EDIT) {
-            auto it = answers.find(p.value("answerId","")); if (it!=answers.end() && p.contains("content")) it->second.content = p["content"];
+            auto it = answers.find(jstr(p,"answerId")); if (it!=answers.end() && p.is_object() && p.contains("content") && p["content"].is_string()) it->second.content = p["content"].get<std::string>();
         } else if (t == T::ANSWER_DELETE) {
-            auto it = answers.find(p.value("answerId","")); if (it!=answers.end()) it->second.deleted = true;
+            auto it = answers.find(jstr(p,"answerId")); if (it!=answers.end()) it->second.deleted = true;
         } else if (t == T::ANSWER_ACCEPT) {
-            auto it = answers.find(p.value("answerId","")); if (it!=answers.end()) it->second.accepted = p.value("accepted", true);
-            auto q = questions.find(p.value("questionId","")); if (q!=questions.end()) q->second.accepted = p.value("accepted", true) ? p.value("answerId","") : (q->second.accepted==p.value("answerId","")?"":q->second.accepted);
+            std::string aid = jstr(p,"answerId"); bool acc = jbool(p,"accepted", true);
+            if (aid.empty()) continue;   // no answer id: nothing to accept
+            auto it = answers.find(aid); if (it!=answers.end()) it->second.accepted = acc;
+            auto q = questions.find(jstr(p,"questionId")); if (q!=questions.end()) q->second.accepted = acc ? aid : (q->second.accepted==aid?"":q->second.accepted);
         } else if (t == T::POLL_CREATE) {
-            std::string id = p.value("pollId","");
-            if (!polls.count(id)) { PV pv; pv.id=id; pv.title=p.value("title",""); pv.question=p.value("question",""); pv.options=p.value("options", json::array()); pv.active=p.value("active",false); pv.ts=e.hlc.wall; polls[id]=pv; pOrder.push_back(id); }
+            std::string id = jstr(p,"pollId");
+            if (!id.empty() && !polls.count(id)) { PV pv; pv.id=id; pv.title=jstr(p,"title"); pv.question=jstr(p,"question"); pv.options=pollOptions(p); pv.active=jbool(p,"active",false); pv.ts=e.hlc.wall; polls[id]=pv; pOrder.push_back(id); }
         } else if (t == T::POLL_SET_ACTIVE) {
-            auto it = polls.find(p.value("pollId","")); if (it!=polls.end()) it->second.active = p.value("active", false);
+            auto it = polls.find(jstr(p,"pollId")); if (it!=polls.end()) it->second.active = jbool(p,"active", false);
         } else if (t == T::POLL_DELETE) {
-            auto it = polls.find(p.value("pollId","")); if (it!=polls.end()) it->second.deleted = true;
+            auto it = polls.find(jstr(p,"pollId")); if (it!=polls.end()) it->second.deleted = true;
         } else if (t == T::PROFILE_SET) {
-            std::string nm = p.value("name",""); if (nm.size() > 40) nm = nm.substr(0,40);
-            names[e.hlc.dev] = nm;   // self-scoped: names the author's OWN address, LWW by fold order
+            // self-scoped: names the author's OWN address, LWW by fold order. Only a string
+            // name counts; capped at NAME_MAX_CP code points (never a byte cut mid-character).
+            if (p.is_object() && p.contains("name") && p["name"].is_string())
+                names[e.hlc.dev] = utf8Clip(p["name"].get<std::string>(), NAME_MAX_CP);
         } else if (t == T::POLL_VOTE) {
-            auto it = polls.find(p.value("pollId","")); if (it!=polls.end()) it->second.votes[p.value("voter", e.hlc.dev)] = p.value("optionId","");
+            // voter = the author (hlc.dev), never payload.voter
+            auto it = polls.find(jstr(p,"pollId")); if (it!=polls.end()) it->second.votes[e.hlc.dev] = jstr(p,"optionId");
         }
     }
 
@@ -205,7 +278,7 @@ inline json computeState(const std::vector<Event>& evs) {
 
     json ps = json::array();
     for (auto& id : pOrder) { auto& pl = polls[id]; if (pl.deleted) continue;
-        json tally = json::object(); for (auto& o : pl.options) tally[o.value("id","")] = 0;
+        json tally = json::object(); for (auto& o : pl.options) tally[jstr(o,"id")] = 0;
         long long voters=0; for (auto& kv : pl.votes) { if (tally.contains(kv.second)) { tally[kv.second] = (long long)tally[kv.second] + 1; voters++; } }
         ps.push_back({{"id",pl.id},{"title",pl.title},{"question",pl.question},{"options",pl.options},{"active",pl.active},{"ts",pl.ts},{"tally",tally},{"votes",voters}});
     }

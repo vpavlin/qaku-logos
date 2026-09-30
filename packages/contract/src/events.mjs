@@ -38,7 +38,7 @@ export const EventType = {
   POLL_CREATE: "poll.create",         // owner/admin
   POLL_SET_ACTIVE: "poll.setActive",  // owner/admin, LWW-by-HLC
   POLL_DELETE: "poll.delete",         // owner/admin, tombstone
-  POLL_VOTE: "poll.vote",             // { pollId, optionId, voter } per-voter LWW register
+  POLL_VOTE: "poll.vote",             // { pollId, optionId, voter } per-AUTHOR LWW register (voter ignored; = hlc.dev)
 };
 
 /** admin/owner may moderate + answer + configure; participants may ask + upvote + vote. */
@@ -81,8 +81,9 @@ export const ev = {
   questionDelete: (hlc, { questionId }, id) =>
     makeEvent(EventType.QUESTION_DELETE, hlc, { questionId }, id),
 
-  // up=true is an upvote, up=false retracts it (toggle). voter is the identity
-  // whose vote this is (defaults to hlc.dev). Concurrent upvotes by DIFFERENT
+  // up=true is an upvote, up=false retracts it (toggle). The fold counts the vote for
+  // the AUTHOR (hlc.dev); `voter` is kept on the wire for older readers but ignored by
+  // the engines (it let one writer vote as many voters). Concurrent upvotes by DIFFERENT
   // voters all survive (set union); the same voter toggling resolves LWW-by-HLC.
   upvote: (hlc, { targetType = UpvoteTarget.QUESTION, targetId, up = true, voter }, id) =>
     makeEvent(EventType.UPVOTE, hlc, { targetType, targetId, up, voter: voter || hlc.dev }, id),

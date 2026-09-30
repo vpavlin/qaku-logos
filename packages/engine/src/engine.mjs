@@ -41,6 +41,22 @@ export function mergeEvents(...logs) {
   return LMerge(...logs);
 }
 
+// Tolerant payload reads. A peer can put anything in a payload (old client, bug, or
+// hostile writer); a wrong-typed field must never throw in the fold or reach a <Text>
+// as a non-string. Missing / null / wrong-typed => the default. Mirrors jget() in
+// qaku_engine.hpp so both engines see the same value for the same bytes.
+function str(v, def = "") { return typeof v === "string" ? v : def; }
+function bool(v, def) { return typeof v === "boolean" ? v : def; }
+// Poll options: an array of objects with a non-empty string id; anything else is dropped
+// (a non-array crashed the fold; an id-less option would soak up malformed votes).
+function optionsOf(v) { return Array.isArray(v) ? v.filter((o) => o !== null && typeof o === "object" && !Array.isArray(o) && typeof o.id === "string" && o.id !== "") : []; }
+// Display names are capped at 40 Unicode CODE POINTS (never mid-character: a UTF-16
+// .slice could split a surrogate pair, the C++ byte cut split UTF-8). Same rule as
+// qaku::utf8Clip in qaku_engine.hpp.
+export const NAME_MAX = 40;
+export function clipName(s) { return [...str(s)].slice(0, NAME_MAX).join(""); }
+function payloadOf(e) { return e.payload !== null && typeof e.payload === "object" && !Array.isArray(e.payload) ? e.payload : {}; }
+
 const ADMIN_EVENTS = new Set([EventType.ADMIN_ADD, EventType.ADMIN_REMOVE]);
 // Events only an owner/admin may author.
 const MOD_EVENTS = new Set([
@@ -83,15 +99,20 @@ export function admitEvents(events) {
   for (const e of ordered) {
     if (!ADMIN_EVENTS.has(e.type)) continue;
     if (!admins.has(e.hlc.dev)) continue;            // only an admin may change admins
-    if (e.type === EventType.ADMIN_ADD) admins.add(e.payload.memberId);
-    else if (e.type === EventType.ADMIN_REMOVE && e.payload.memberId !== owner) admins.delete(e.payload.memberId);
+    const m = str(payloadOf(e).memberId);
+    if (e.type === EventType.ADMIN_ADD) { if (m) admins.add(m); }
+    else if (e.type === EventType.ADMIN_REMOVE && m !== owner) admins.delete(m);
   }
 
-  // Creator of each question/answer (for author-gated edit/delete).
+  // Creator of each question/answer (for author-gated edit/delete). FIRST writer wins
+  // (earliest in HLC order): a later question.add reusing someone else's questionId
+  // must not hand the impostor edit/delete rights. Matches the fold, which also keeps
+  // the first question.add, so both are arrival-order independent.
   const creatorOf = new Map();
   for (const e of ordered) {
-    if (e.type === EventType.QUESTION_ADD) creatorOf.set(e.payload.questionId, e.hlc.dev);
-    else if (e.type === EventType.ANSWER_POST) creatorOf.set(e.payload.answerId, e.hlc.dev);
+    const p = payloadOf(e);
+    const id = e.type === EventType.QUESTION_ADD ? str(p.questionId) : e.type === EventType.ANSWER_POST ? str(p.answerId) : null;
+    if (id && !creatorOf.has(id)) creatorOf.set(id, e.hlc.dev);
   }
 
   const admitted = [];
@@ -108,7 +129,7 @@ export function admitEvents(events) {
       continue;
     }
     if (e.type === EventType.QUESTION_EDIT || e.type === EventType.QUESTION_DELETE) {
-      if (admins.has(author) || creatorOf.get(e.payload.questionId) === author) admitted.push(e);
+      if (admins.has(author) || creatorOf.get(str(payloadOf(e).questionId)) === author) admitted.push(e);
       continue;
     }
     if (PARTICIPANT_EVENTS.has(e.type)) { admitted.push(e); continue; }
@@ -123,10 +144,14 @@ function foldUpvotes(ordered) {
   const reg = new Map();
   for (const e of ordered) {
     if (e.type !== EventType.UPVOTE) continue;
-    const { targetId, voter, up } = e.payload;
+    const p = payloadOf(e);
+    const targetId = str(p.targetId);
+    // The voter IS the author (hlc.dev, the signer). payload.voter is ignored: honouring
+    // it let one writer cast votes "as" any number of made-up voters.
+    const voter = e.hlc.dev;
     let m = reg.get(targetId);
     if (!m) { m = new Map(); reg.set(targetId, m); }
-    m.set(voter, up); // ordered ascending ⇒ later event overwrites; toggle-safe, idempotent
+    m.set(voter, bool(p.up, true)); // ordered ascending ⇒ later event overwrites; toggle-safe, idempotent
   }
   const out = new Map(); // targetId -> Set<voter up===true>
   for (const [tid, m] of reg) {
@@ -152,90 +177,92 @@ export function computeState(events) {
   const names = new Map();     // address -> latest display name (LWW-by-HLC, ordered fold)
 
   for (const e of ordered) {
-    const p = e.payload;
+    const p = payloadOf(e);
     switch (e.type) {
       case EventType.SESSION_CREATE:
         if (!session) session = {
-          id: p.sessionId, title: p.title, description: p.description || "",
+          id: str(p.sessionId), title: str(p.title), description: str(p.description),
           owner: e.hlc.dev, enabled: true, moderationEnabled: false, createdAt: e.hlc.wall,
         };
         break;
       case EventType.SESSION_CONFIG:
-        if (session) {
-          if (p.title != null) session.title = p.title;
-          if (p.description != null) session.description = p.description;
-          if (p.enabled != null) session.enabled = p.enabled;
-          if (p.moderationEnabled != null) session.moderationEnabled = p.moderationEnabled;
+        if (session) {   // typed fields only: a wrong-typed patch field is ignored, never stored
+          if (typeof p.title === "string") session.title = p.title;
+          if (typeof p.description === "string") session.description = p.description;
+          if (typeof p.enabled === "boolean") session.enabled = p.enabled;
+          if (typeof p.moderationEnabled === "boolean") session.moderationEnabled = p.moderationEnabled;
         }
         break;
       case EventType.QUESTION_ADD: {
-        const cur = questions.get(p.questionId);
-        if (cur) cur.view = { ...cur.view, ...p };
-        else questions.set(p.questionId, { view: { id: p.questionId, evId: e.id, content: p.content, author: p.author || e.hlc.dev, verified: sigVerified(e), ts: e.hlc.wall, moderated: false, acceptedAnswerId: null }, deleted: false });
+        // FIRST question.add for an id wins (HLC order); a later duplicate is ignored,
+        // never merged over it (that let anyone rewrite someone else's question).
+        const qid = str(p.questionId);
+        if (qid && !questions.has(qid)) questions.set(qid, { view: { id: qid, evId: e.id, content: str(p.content), author: str(p.author) || e.hlc.dev, verified: sigVerified(e), ts: e.hlc.wall, moderated: false, acceptedAnswerId: null }, deleted: false });
         break;
       }
       case EventType.QUESTION_EDIT: {
-        const cur = questions.get(p.questionId);
+        const cur = questions.get(str(p.questionId));
         if (!cur) break;                    // orphan edit — ignore (create may fold later; lenient)
-        if (p.content != null) cur.view.content = p.content;   // field supersede, HLC order
+        if (typeof p.content === "string") cur.view.content = p.content;   // field supersede, HLC order
         break;
       }
       case EventType.QUESTION_DELETE: {
-        const cur = questions.get(p.questionId);
+        const cur = questions.get(str(p.questionId));
         if (cur) cur.deleted = true;        // sticky tombstone
         break;
       }
       case EventType.MODERATE: {
-        const cur = questions.get(p.questionId);
-        if (cur) cur.view.moderated = !!p.hidden;   // LWW-by-HLC flag
+        const cur = questions.get(str(p.questionId));
+        if (cur) cur.view.moderated = bool(p.hidden, true);   // LWW-by-HLC flag
         break;
       }
       case EventType.ANSWER_POST: {
-        const cur = answers.get(p.answerId);
-        if (cur) cur.view = { ...cur.view, ...p };
-        else answers.set(p.answerId, { view: { id: p.answerId, evId: e.id, questionId: p.questionId, content: p.content, author: p.author || e.hlc.dev, verified: sigVerified(e), ts: e.hlc.wall, accepted: false }, deleted: false });
+        const aid = str(p.answerId);       // first post wins, like questions (and the C++ fold)
+        if (aid && !answers.has(aid)) answers.set(aid, { view: { id: aid, evId: e.id, questionId: str(p.questionId), content: str(p.content), author: str(p.author) || e.hlc.dev, verified: sigVerified(e), ts: e.hlc.wall, accepted: false }, deleted: false });
         break;
       }
       case EventType.ANSWER_EDIT: {
-        const cur = answers.get(p.answerId);
-        if (cur && p.content != null) cur.view.content = p.content;
+        const cur = answers.get(str(p.answerId));
+        if (cur && typeof p.content === "string") cur.view.content = p.content;
         break;
       }
       case EventType.ANSWER_DELETE: {
-        const cur = answers.get(p.answerId);
+        const cur = answers.get(str(p.answerId));
         if (cur) cur.deleted = true;
         break;
       }
       case EventType.ANSWER_ACCEPT: {
-        const cur = answers.get(p.answerId);
-        if (cur) cur.view.accepted = !!p.accepted;   // LWW-by-HLC
-        const q = questions.get(p.questionId);
-        if (q) q.view.acceptedAnswerId = p.accepted ? p.answerId : (q.view.acceptedAnswerId === p.answerId ? null : q.view.acceptedAnswerId);
+        const aid = str(p.answerId), accepted = bool(p.accepted, true);
+        if (!aid) break;                      // no answer id: nothing to accept
+        const cur = answers.get(aid);
+        if (cur) cur.view.accepted = accepted;   // LWW-by-HLC
+        const q = questions.get(str(p.questionId));
+        if (q) q.view.acceptedAnswerId = accepted ? aid : (q.view.acceptedAnswerId === aid ? null : q.view.acceptedAnswerId);
         break;
       }
       case EventType.POLL_CREATE: {
-        const cur = polls.get(p.pollId);
-        if (cur) cur.view = { ...cur.view, ...p };
-        else polls.set(p.pollId, { view: { id: p.pollId, title: p.title || "", question: p.question, options: p.options, active: !!p.active, ts: e.hlc.wall }, deleted: false, votes: new Map() });
+        const pid = str(p.pollId);         // first create wins (C++ parity)
+        if (pid && !polls.has(pid)) polls.set(pid, { view: { id: pid, title: str(p.title), question: str(p.question), options: optionsOf(p.options), active: bool(p.active, false), ts: e.hlc.wall }, deleted: false, votes: new Map() });
         break;
       }
       case EventType.POLL_SET_ACTIVE: {
-        const cur = polls.get(p.pollId);
-        if (cur) cur.view.active = !!p.active;        // LWW-by-HLC
+        const cur = polls.get(str(p.pollId));
+        if (cur) cur.view.active = bool(p.active, false);        // LWW-by-HLC
         break;
       }
       case EventType.POLL_DELETE: {
-        const cur = polls.get(p.pollId);
+        const cur = polls.get(str(p.pollId));
         if (cur) cur.deleted = true;
         break;
       }
       case EventType.POLL_VOTE: {
-        const cur = polls.get(p.pollId);
-        if (cur) cur.votes.set(p.voter, p.optionId);  // per-voter LWW register (HLC order)
+        const cur = polls.get(str(p.pollId));
+        // per-voter LWW register (HLC order); the voter is the author, never payload.voter
+        if (cur) cur.votes.set(e.hlc.dev, str(p.optionId));
         break;
       }
       case EventType.PROFILE_SET:
-        if (typeof p.name === "string") names.set(e.hlc.dev, p.name.slice(0, 40)); // LWW per author
+        if (typeof p.name === "string") names.set(e.hlc.dev, clipName(p.name)); // LWW per author
         break;
       default: break;
     }
@@ -263,7 +290,7 @@ export function computeState(events) {
   const livePolls = [...polls.values()].filter((pl) => !pl.deleted).map((pl) => {
     const tally = {}; for (const o of pl.view.options) tally[o.id] = 0;
     let voters = 0;
-    for (const [, optionId] of pl.votes) { if (optionId in tally) { tally[optionId] += 1; voters += 1; } }
+    for (const [, optionId] of pl.votes) { if (Object.prototype.hasOwnProperty.call(tally, optionId)) { tally[optionId] += 1; voters += 1; } }
     return { ...pl.view, tally, votes: voters };
   }).sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
 
