@@ -19,15 +19,16 @@ function shuffled(arr, seed) {
 
 test("vectors/rules.json is current with rules-cases.mjs (regenerate with gen-rules-vectors.mjs)", () => {
   assert.equal(vectors.length, cases.length);
+  for (let i = 0; i < cases.length; i++) assert.equal(vectors[i].me, cases[i].me, cases[i].name);
   for (let i = 0; i < cases.length; i++) assert.deepEqual(vectors[i].events, JSON.parse(JSON.stringify(cases[i].events)), cases[i].name);
 });
 
 for (const v of vectors) {
   test(`fold matches the shared vector in every arrival order: ${v.name}`, () => {
-    assert.deepEqual(project(computeState(v.events)), v.expect);
+    assert.deepEqual(project(computeState(v.events, { me: v.me })), v.expect);
     for (let k = 1; k <= 20; k++) {
       const withDupes = shuffled([...v.events, ...v.events.slice(0, 3)], k * 7919);
-      assert.deepEqual(project(computeState(withDupes)), v.expect, `order ${k}`);
+      assert.deepEqual(project(computeState(withDupes, { me: v.me })), v.expect, `order ${k}`);
     }
   });
 }
@@ -57,6 +58,17 @@ test("malformed payloads: no throw, strings stay strings", () => {
   for (const q of st.questions) { assert.equal(typeof q.content, "string"); assert.equal(typeof q.author, "string"); }
   assert.deepEqual(st.polls.find((p) => p.id === "p").options, []);
   assert.equal(typeof st.session.title, "string");
+});
+
+test("polls: closed-poll votes ignored, changed vote, results default, myVote", () => {
+  const closed = computeState(cases[4].events, { me: "B" }).polls[0];
+  assert.deepEqual(closed.tally, { o1: 0, o2: 1 });           // only B's vote while open
+  assert.equal(closed.myVote, "o2");                          // B's closed-time change ignored
+  const changed = computeState(cases[5].events, { me: "A" }).polls;
+  assert.deepEqual(changed[0].tally, { o1: 1, o2: 0, o3: 1 });
+  assert.deepEqual(changed.map((p) => p.myVote), ["o3", null, null]);
+  assert.deepEqual(computeState(cases[5].events).polls.map((p) => p.myVote), [null, null, null]);   // no viewer
+  assert.deepEqual(computeState(cases[6].events).polls.map((p) => p.results), ["always", "afterVote", "always", "always", "always"]);
 });
 
 test("clipName never splits a character", () => {

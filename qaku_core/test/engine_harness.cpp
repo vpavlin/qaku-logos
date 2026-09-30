@@ -3,7 +3,8 @@
 // 1. PARITY: folds every case in packages/engine/test/vectors/rules.json (written by the
 //    JS engine, see gen-rules-vectors.mjs) and requires the SAME projection the JS fold
 //    produced: voter = author, first question.add wins, creatorOf = first writer, and
-//    malformed payloads fold identically. Each case is also folded in reversed and
+//    malformed payloads fold identically, votes on a closed poll are ignored, and a case's
+//    optional `me` yields the same per-poll myVote. Each case is also folded in reversed and
 //    rotated arrival orders (the rules must be order-independent).
 // 2. CRASH CASES: a name cut at 40 BYTES used to split UTF-8 so json::dump threw
 //    "incomplete UTF-8"; null / wrong-typed / non-object payloads used to throw out of
@@ -52,7 +53,7 @@ static json project(const json& st) {
     json ps = json::array();
     for (const auto& p : st["polls"])
         ps.push_back({{"id", p["id"]}, {"title", p["title"]}, {"question", p["question"]}, {"options", p["options"]},
-                      {"active", p["active"]}, {"tally", p["tally"]}, {"votes", p["votes"]}});
+                      {"active", p["active"]}, {"results", p["results"]}, {"tally", p["tally"]}, {"votes", p["votes"]}, {"myVote", p["myVote"]}});
     out["polls"] = ps;
     out["eventCount"] = st["eventCount"];
     return out;
@@ -71,7 +72,7 @@ static void parity(const char* path) {
         for (size_t k = 1; k < evs.size(); k += 3) { std::vector<Event> r = evs; std::rotate(r.begin(), r.begin() + k, r.end()); orders.push_back(r); }
         for (size_t o = 0; o < orders.size(); o++) {
             json got;
-            try { got = project(computeState(orders[o])); }
+            try { got = project(computeState(orders[o], c.value("me", std::string()))); }
             catch (const std::exception& e) { fprintf(stderr, "FAIL [%s] order %zu threw: %s\n", c["name"].get<std::string>().c_str(), o, e.what()); g_fail++; continue; }
             if (got != c["expect"]) {
                 g_fail++;

@@ -6,6 +6,6 @@ import { writeFileSync } from "node:fs";
 import { computeState } from "../src/engine.mjs";
 import { cases, project } from "./rules-cases.mjs";
 
-const out = cases.map((c) => ({ name: c.name, events: c.events, expect: project(computeState(c.events)) }));
+const out = cases.map((c) => ({ name: c.name, ...(c.me ? { me: c.me } : {}), events: c.events, expect: project(computeState(c.events, { me: c.me })) }));
 writeFileSync(new URL("./vectors/rules.json", import.meta.url), JSON.stringify(out, null, 1) + "\n");
 console.log(`wrote ${out.length} cases`);

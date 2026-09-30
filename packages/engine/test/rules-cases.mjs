@@ -10,6 +10,8 @@ export function E(id, type, wall, dev, payload) {
   return { v: 1, id, type, hlc: { wall, ctr: 0, dev }, dev, payload };
 }
 
+// A case may carry `me` (the viewer's address): both engines fold it with that viewer so
+// each poll's myVote is compared too.
 // The part of the fold both engines emit identically (JS adds `verified`, C++ doesn't).
 export function project(st) {
   const s = st.session;
@@ -23,7 +25,7 @@ export function project(st) {
       acceptedAnswerId: q.acceptedAnswerId, upvotes: q.upvotes, upvoters: q.upvoters,
       answers: q.answers.map((a) => ({ id: a.id, content: a.content, author: a.author, accepted: a.accepted, upvoters: a.upvoters })),
     })),
-    polls: st.polls.map((p) => ({ id: p.id, title: p.title, question: p.question, options: p.options, active: p.active, tally: p.tally, votes: p.votes })),
+    polls: st.polls.map((p) => ({ id: p.id, title: p.title, question: p.question, options: p.options, active: p.active, results: p.results, tally: p.tally, votes: p.votes, myVote: p.myVote })),
     eventCount: st.eventCount,
   };
 }
@@ -66,7 +68,7 @@ export const cases = [
       create(),
       E("e-cfg", "session.config", 5, "S", { title: 42, description: null, enabled: "no", moderationEnabled: true }),
       E("e-p1", "poll.create", 10, "S", { pollId: "p1", question: "bad options", options: "not-an-array", active: "yes" }),
-      E("e-p2", "poll.create", 11, "S", { pollId: "p2", question: 7, options: [null, 5, "x", [1], { id: "o1", title: "ok" }, { title: "no id" }] }),
+      E("e-p2", "poll.create", 11, "S", { pollId: "p2", question: 7, options: [null, 5, "x", [1], { id: "o1", title: "ok" }, { title: "no id" }], active: true }),
       E("e-v1", "poll.vote", 12, "C", { pollId: "p2", optionId: "o1" }),
       E("e-v2", "poll.vote", 13, "D", { pollId: "p2", optionId: 99 }),
       E("e-v3", "poll.vote", 14, "F", { pollId: "p2", optionId: "constructor" }),
@@ -93,6 +95,46 @@ export const cases = [
       // 41 emoji (4 bytes / a UTF-16 surrogate pair each): a UTF-16 slice split a pair.
       E("e-n2", "profile.set", 11, "B", { name: "\u{1F600}".repeat(41) }),
       E("e-n3", "profile.set", 12, "C", { name: "x".repeat(39) + "\u{1F600}\u{1F600}" }),
+    ],
+  },
+  {
+    name: "a vote on a closed poll is ignored; reopening lets it count (HLC order)",
+    me: "B",
+    events: [
+      create(),
+      E("e-p1", "poll.create", 10, "S", { pollId: "p1", question: "Now?", options: [{ id: "o1", title: "Yes" }, { id: "o2", title: "No" }], active: false }),
+      E("e-v1", "poll.vote", 20, "A", { pollId: "p1", optionId: "o1" }),        // closed: ignored
+      E("e-on", "poll.setActive", 30, "S", { pollId: "p1", active: true }),
+      E("e-v2", "poll.vote", 40, "B", { pollId: "p1", optionId: "o2" }),        // open: counts
+      E("e-off", "poll.setActive", 50, "S", { pollId: "p1", active: false }),
+      E("e-v3", "poll.vote", 60, "B", { pollId: "p1", optionId: "o1" }),        // closed again: B's change ignored
+      E("e-v4", "poll.vote", 61, "C", { pollId: "p1", optionId: "o1" }),        // closed: ignored
+    ],
+  },
+  {
+    name: "a changed vote replaces the voter's earlier one (LWW per author) + myVote",
+    me: "A",
+    events: [
+      create(),
+      E("e-p1", "poll.create", 10, "S", { pollId: "p1", title: "Lunch", question: "Where?", options: [{ id: "o1", title: "Pizza" }, { id: "o2", title: "Sushi" }, { id: "o3", title: "Tacos" }], active: true }),
+      E("e-v1", "poll.vote", 20, "A", { pollId: "p1", optionId: "o1" }),
+      E("e-v2", "poll.vote", 21, "B", { pollId: "p1", optionId: "o1" }),
+      E("e-v3", "poll.vote", 30, "A", { pollId: "p1", optionId: "o3" }),        // A changes its mind
+      E("e-p2", "poll.create", 40, "S", { pollId: "p2", question: "Unvoted by me", options: [{ id: "x", title: "X" }], active: true }),
+      E("e-v4", "poll.vote", 41, "B", { pollId: "p2", optionId: "x" }),
+      E("e-p3", "poll.create", 50, "S", { pollId: "p3", question: "Bad option", options: [{ id: "y", title: "Y" }], active: true }),
+      E("e-v5", "poll.vote", 51, "A", { pollId: "p3", optionId: "nope" }),      // unknown option: not counted, myVote null
+    ],
+  },
+  {
+    name: "results visibility: default always, afterVote kept, anything else is always",
+    events: [
+      create(),
+      E("e-p1", "poll.create", 10, "S", { pollId: "p1", question: "old poll", options: [{ id: "o1", title: "A" }], active: true }),
+      E("e-p2", "poll.create", 11, "S", { pollId: "p2", question: "hidden", options: [{ id: "o1", title: "A" }], active: true, results: "afterVote" }),
+      E("e-p3", "poll.create", 12, "S", { pollId: "p3", question: "junk", options: [{ id: "o1", title: "A" }], active: true, results: 7 }),
+      E("e-p4", "poll.create", 13, "S", { pollId: "p4", question: "unknown", options: [{ id: "o1", title: "A" }], active: true, results: "never" }),
+      E("e-p5", "poll.create", 14, "S", { pollId: "p5", question: "explicit", options: [{ id: "o1", title: "A" }], active: true, results: "always" }),
     ],
   },
 ];

@@ -55,6 +55,9 @@ function optionsOf(v) { return Array.isArray(v) ? v.filter((o) => o !== null && 
 // qaku::utf8Clip in qaku_engine.hpp.
 export const NAME_MAX = 40;
 export function clipName(s) { return [...str(s)].slice(0, NAME_MAX).join(""); }
+// Poll results visibility: "always" (default; also any unknown value and old polls that
+// predate the field) or "afterVote". Display-only - the tally is always folded.
+function resultsOf(v) { return v === "afterVote" ? "afterVote" : "always"; }
 function payloadOf(e) { return e.payload !== null && typeof e.payload === "object" && !Array.isArray(e.payload) ? e.payload : {}; }
 
 const ADMIN_EVENTS = new Set([EventType.ADMIN_ADD, EventType.ADMIN_REMOVE]);
@@ -165,8 +168,11 @@ function foldUpvotes(ordered) {
 /**
  * Fold an event log (possibly unordered / with duplicates) into session state.
  * @param {object[]} events
+ * @param {{me?: string}} [opts] the viewer's identity (author address); only used to
+ *   emit each poll's `myVote` (that voter's live optionId, or null). Never changes the fold.
  */
-export function computeState(events) {
+export function computeState(events, opts = {}) {
+  const me = opts && typeof opts.me === "string" && opts.me ? opts.me : null;
   const admission = admitEvents(events);
   const ordered = admission.admitted;
 
@@ -242,7 +248,7 @@ export function computeState(events) {
       }
       case EventType.POLL_CREATE: {
         const pid = str(p.pollId);         // first create wins (C++ parity)
-        if (pid && !polls.has(pid)) polls.set(pid, { view: { id: pid, title: str(p.title), question: str(p.question), options: optionsOf(p.options), active: bool(p.active, false), ts: e.hlc.wall }, deleted: false, votes: new Map() });
+        if (pid && !polls.has(pid)) polls.set(pid, { view: { id: pid, title: str(p.title), question: str(p.question), options: optionsOf(p.options), active: bool(p.active, false), results: resultsOf(p.results), ts: e.hlc.wall }, deleted: false, votes: new Map() });
         break;
       }
       case EventType.POLL_SET_ACTIVE: {
@@ -257,8 +263,10 @@ export function computeState(events) {
       }
       case EventType.POLL_VOTE: {
         const cur = polls.get(str(p.pollId));
-        // per-voter LWW register (HLC order); the voter is the author, never payload.voter
-        if (cur) cur.votes.set(e.hlc.dev, str(p.optionId));
+        // per-voter LWW register (HLC order); the voter is the author, never payload.voter.
+        // A vote counts only while the poll is ACTIVE at this point of the ordered log, so a
+        // vote on a closed poll is ignored whatever order the events arrived in.
+        if (cur && cur.view.active) cur.votes.set(e.hlc.dev, str(p.optionId));
         break;
       }
       case EventType.PROFILE_SET:
@@ -291,7 +299,9 @@ export function computeState(events) {
     const tally = {}; for (const o of pl.view.options) tally[o.id] = 0;
     let voters = 0;
     for (const [, optionId] of pl.votes) { if (Object.prototype.hasOwnProperty.call(tally, optionId)) { tally[optionId] += 1; voters += 1; } }
-    return { ...pl.view, tally, votes: voters };
+    const mine = me !== null ? pl.votes.get(me) : undefined;
+    const myVote = mine !== undefined && Object.prototype.hasOwnProperty.call(tally, mine) ? mine : null;
+    return { ...pl.view, tally, votes: voters, myVote };
   }).sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
 
   return {

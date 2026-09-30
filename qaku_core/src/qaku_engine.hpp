@@ -116,6 +116,12 @@ inline json pollOptions(const json& p) {
     return out;
 }
 
+// Poll results visibility: "always" (default, also any unknown value / old polls) or
+// "afterVote". Display-only; the tally is always folded (engine.mjs resultsOf).
+inline std::string pollResults(const json& p) {
+    return jstr(p, "results") == "afterVote" ? "afterVote" : "always";
+}
+
 // mergeEvents / compareHlc are now logos_sync::mergeEvents / compareHlc (aliased
 // above) — union-by-id + HLC sort, idempotent, byte-identical to QAKU's original.
 
@@ -170,14 +176,16 @@ inline Admission admitEvents(const std::vector<Event>& evs) {
 
 // Fold the admitted log into a snapshot JSON: {session, owner, admins,
 // questions:[{id,content,author,ts,moderated,acceptedAnswerId,upvotes,upvoters,
-// answers:[...]}], polls:[{...,tally,votes}], counts}. Mirror of computeState.
-inline json computeState(const std::vector<Event>& evs) {
+// answers:[...]}], polls:[{...,results,tally,votes,myVote}], counts}. Mirror of
+// computeState. `me` = the viewer's author address; only used for each poll's myVote
+// (that voter's live optionId, or null). Empty = no viewer (myVote always null).
+inline json computeState(const std::vector<Event>& evs, const std::string& me = std::string()) {
     auto adm = admitEvents(evs);
     const auto& ordered = adm.admitted;
 
     struct QV { std::string id, evId, content, author; long long ts=0; bool moderated=false; std::string accepted; bool deleted=false; };
     struct AV { std::string id, evId, questionId, content, author; long long ts=0; bool accepted=false; bool deleted=false; };
-    struct PV { std::string id, title, question; json options; bool active=false; long long ts=0; bool deleted=false; std::map<std::string,std::string> votes; };
+    struct PV { std::string id, title, question, results; json options; bool active=false; long long ts=0; bool deleted=false; std::map<std::string,std::string> votes; };
 
     bool haveSession=false; json session=nullptr;
     std::map<std::string,QV> questions; std::vector<std::string> qOrder;
@@ -232,7 +240,7 @@ inline json computeState(const std::vector<Event>& evs) {
             auto q = questions.find(jstr(p,"questionId")); if (q!=questions.end()) q->second.accepted = acc ? aid : (q->second.accepted==aid?"":q->second.accepted);
         } else if (t == T::POLL_CREATE) {
             std::string id = jstr(p,"pollId");
-            if (!id.empty() && !polls.count(id)) { PV pv; pv.id=id; pv.title=jstr(p,"title"); pv.question=jstr(p,"question"); pv.options=pollOptions(p); pv.active=jbool(p,"active",false); pv.ts=e.hlc.wall; polls[id]=pv; pOrder.push_back(id); }
+            if (!id.empty() && !polls.count(id)) { PV pv; pv.id=id; pv.title=jstr(p,"title"); pv.question=jstr(p,"question"); pv.options=pollOptions(p); pv.active=jbool(p,"active",false); pv.results=pollResults(p); pv.ts=e.hlc.wall; polls[id]=pv; pOrder.push_back(id); }
         } else if (t == T::POLL_SET_ACTIVE) {
             auto it = polls.find(jstr(p,"pollId")); if (it!=polls.end()) it->second.active = jbool(p,"active", false);
         } else if (t == T::POLL_DELETE) {
@@ -243,8 +251,9 @@ inline json computeState(const std::vector<Event>& evs) {
             if (p.is_object() && p.contains("name") && p["name"].is_string())
                 names[e.hlc.dev] = utf8Clip(p["name"].get<std::string>(), NAME_MAX_CP);
         } else if (t == T::POLL_VOTE) {
-            // voter = the author (hlc.dev), never payload.voter
-            auto it = polls.find(jstr(p,"pollId")); if (it!=polls.end()) it->second.votes[e.hlc.dev] = jstr(p,"optionId");
+            // voter = the author (hlc.dev), never payload.voter. Counts only while the poll is
+            // ACTIVE at this point of the ordered log (a vote on a closed poll is ignored).
+            auto it = polls.find(jstr(p,"pollId")); if (it!=polls.end() && it->second.active) it->second.votes[e.hlc.dev] = jstr(p,"optionId");
         }
     }
 
@@ -280,7 +289,9 @@ inline json computeState(const std::vector<Event>& evs) {
     for (auto& id : pOrder) { auto& pl = polls[id]; if (pl.deleted) continue;
         json tally = json::object(); for (auto& o : pl.options) tally[jstr(o,"id")] = 0;
         long long voters=0; for (auto& kv : pl.votes) { if (tally.contains(kv.second)) { tally[kv.second] = (long long)tally[kv.second] + 1; voters++; } }
-        ps.push_back({{"id",pl.id},{"title",pl.title},{"question",pl.question},{"options",pl.options},{"active",pl.active},{"ts",pl.ts},{"tally",tally},{"votes",voters}});
+        json myVote = nullptr;
+        if (!me.empty()) { auto mv = pl.votes.find(me); if (mv != pl.votes.end() && tally.contains(mv->second)) myVote = mv->second; }
+        ps.push_back({{"id",pl.id},{"title",pl.title},{"question",pl.question},{"options",pl.options},{"active",pl.active},{"results",pl.results},{"ts",pl.ts},{"tally",tally},{"votes",voters},{"myVote",myVote}});
     }
     std::sort(ps.begin(), ps.end(), [](const json& x, const json& y){ long long xt=x["ts"],yt=y["ts"]; if (xt!=yt) return xt<yt; return x["id"]<y["id"]; });
 
