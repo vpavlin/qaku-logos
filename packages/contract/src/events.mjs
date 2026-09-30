@@ -100,8 +100,10 @@ export const ev = {
   moderate: (hlc, { questionId, hidden = true }, id) =>
     makeEvent(EventType.MODERATE, hlc, { questionId, hidden }, id),
 
-  pollCreate: (hlc, { pollId, title = "", question, options, active = false }, id) =>
-    makeEvent(EventType.POLL_CREATE, hlc, { pollId, title, question, options, active }, id),
+  // results: "always" | "afterVote" (who sees the tally before voting). Always a defined
+  // string, never undefined, so the signed payload survives the JSON round-trip.
+  pollCreate: (hlc, { pollId, title = "", question, options, active = false, results = "always" }, id) =>
+    makeEvent(EventType.POLL_CREATE, hlc, { pollId, title, question, options, active, results: results === "afterVote" ? "afterVote" : "always" }, id),
   pollSetActive: (hlc, { pollId, active }, id) =>
     makeEvent(EventType.POLL_SET_ACTIVE, hlc, { pollId, active }, id),
   pollDelete: (hlc, { pollId }, id) =>

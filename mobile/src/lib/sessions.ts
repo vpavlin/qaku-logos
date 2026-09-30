@@ -479,6 +479,18 @@ export class Sessions {
   setOpen(h: string, enabled: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "sessionConfig", { enabled }) : Promise.resolve(); }
   addAdmin(h: string, memberId: string, name = "") { const r = this.byHash.get(h); return r ? this.append(r, "adminAdd", { memberId, name }) : Promise.resolve(); }
   removeAdmin(h: string, memberId: string) { const r = this.byHash.get(h); return r ? this.append(r, "adminRemove", { memberId }) : Promise.resolve(); }
+  // --- polls (owner/admin create/open-close/delete; anyone votes). Local-first like the rest:
+  // append() folds + persists before the send. Every payload field is a defined value (a
+  // signed payload with an undefined field fails verification after the JSON round-trip).
+  createPoll(h: string, p: { title?: string; question: string; options: string[]; active: boolean; results: "always" | "afterVote" }) {
+    const r = this.byHash.get(h); if (!r) return Promise.resolve();
+    const options = p.options.map((t) => t.trim()).filter(Boolean).map((title) => ({ id: rid(), title }));
+    return this.append(r, "pollCreate", { pollId: rid(), title: (p.title || "").trim(), question: p.question.trim(), options, active: !!p.active, results: p.results === "afterVote" ? "afterVote" : "always" });
+  }
+  setPollActive(h: string, pollId: string, active: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "pollSetActive", { pollId, active }) : Promise.resolve(); }
+  deletePoll(h: string, pollId: string) { const r = this.byHash.get(h); return r ? this.append(r, "pollDelete", { pollId }) : Promise.resolve(); }
+  // One live vote per identity: a later vote replaces ours (engine LWW per author).
+  votePoll(h: string, pollId: string, optionId: string) { const r = this.byHash.get(h); return r ? this.append(r, "pollVote", { pollId, optionId, voter: this.myAddress }) : Promise.resolve(); }
   isOwner(h: string): boolean { return this.state(h).owner === this.myAddress; }
   ownerOf(h: string): string { return this.state(h).owner || ""; }
   adminsOf(h: string): string[] { return this.state(h).admins || []; }
@@ -487,15 +499,16 @@ export class Sessions {
   // Memoized fold: the log is append-only, so its length is a reliable "changed" key.
   // Without this, computeState ran on every render (3s tick + every emit) for a big log,
   // which is the ongoing sluggishness.
-  private stateCache = new Map<string, { n: number; st: any }>();
+  // Folded as this device's identity so each poll carries myVote (our live option or null).
+  private stateCache = new Map<string, { n: number; me: string; st: any }>();
   state(topicHash: string): any {
     const r = this.byHash.get(topicHash); if (!r) return { questions: [], polls: [], names: {} };
     const c = this.stateCache.get(topicHash);
-    if (c && c.n === r.log.length) return c.st;
+    if (c && c.n === r.log.length && c.me === this.myAddress) return c.st;
     let st: any;
     // Never let one bad event take the screen down: keep the last good fold (or an empty one).
-    try { st = computeState(r.log); } catch (e) { console.warn("qaku: fold failed", e); return c ? c.st : { questions: [], polls: [], names: {} }; }
-    this.stateCache.set(topicHash, { n: r.log.length, st });
+    try { st = computeState(r.log, { me: this.myAddress }); } catch (e) { console.warn("qaku: fold failed", e); return c ? c.st : { questions: [], polls: [], names: {} }; }
+    this.stateCache.set(topicHash, { n: r.log.length, me: this.myAddress, st });
     return st;
   }
   secretHex(topicHash: string): string { return this.byHash.get(topicHash)?.meta.secretHex || ""; }

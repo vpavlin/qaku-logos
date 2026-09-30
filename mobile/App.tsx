@@ -3,7 +3,7 @@
 // with optional display names; a small collapsible sync line keeps the diagnostics out
 // of the way. Palette = the original qaku (dark + gold primary + teal accent).
 import React, { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState, RefreshControl, Image, StatusBar, Alert } from "react-native";
+import { SafeAreaView, ScrollView, View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, BackHandler, AppState, RefreshControl, Image, StatusBar, Alert, Switch } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import QRCode from "react-native-qrcode-svg";
@@ -93,6 +93,7 @@ function AppInner() {
   const [sortBy, setSortBy] = useState<"top" | "new" | "old" | "answered">("top");
   const [filterBy, setFilterBy] = useState<"all" | "unanswered" | "answered">("all");
   const [hiddenOpen, setHiddenOpen] = useState(false);
+  const [roomTab, setRoomTab] = useState<"questions" | "polls">("questions");
   // modals
   const [scanning, setScanning] = useState(false);
   // One-shot latch: onBarcodeScanned fires on every camera frame until the modal's
@@ -107,6 +108,7 @@ function AppInner() {
   const [copied, setCopied] = useState("");
   const [adminModal, setAdminModal] = useState(false);
   const [adminInput, setAdminInput] = useState("");
+  const [pollModal, setPollModal] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
 
   const copy = async (text: string, label = "Copied") => {
@@ -132,7 +134,7 @@ function AppInner() {
       ],
     );
   };
-  const leaveRoom = () => { if (openHash) sessions.markSeen(openHash); setOpenHash(null); };
+  const leaveRoom = () => { if (openHash) sessions.markSeen(openHash); setOpenHash(null); setRoomTab("questions"); };
   // Star → keep this Q&A synced in the background (foreground service + notifications).
   const toggleStar = async (h: string) => { await sessions.toggleStar(h); await updateKeepAlive(sessions.starredCount()); };
 
@@ -162,12 +164,13 @@ function AppInner() {
       if (scanning) { setScanning(false); return true; }
       if (nameModal) { setNameModal(false); return true; }
       if (shareHash) { setShareHash(null); return true; }
+      if (pollModal) { setPollModal(false); return true; }
       if (openHash) { leaveRoom(); return true; }
       return false;
     };
     const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
     return () => sub.remove();
-  }, [scanning, nameModal, shareHash, openHash]);
+  }, [scanning, nameModal, shareHash, pollModal, openHash]);
 
   // Re-sync whenever the app returns to the foreground — catches anything peers posted
   // while we were backgrounded/offline (a single reconnect SYNC_REQ can miss it).
@@ -334,6 +337,54 @@ function AppInner() {
       </View>
     </View>
   );
+  const polls: any[] = st.polls || [];
+  const confirmDeletePoll = (p: any) => Alert.alert(
+    "Delete this poll?",
+    `"${p.title || p.question}" and its votes are removed for everyone.`,
+    [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => { sessions.deletePoll(openHash!, p.id).catch(() => {}); } }],
+  );
+  // Poll card. Counts only - never who voted for what. Results are visible when the poll
+  // shows them always, once we've voted, once it's closed, or to an owner/admin; otherwise
+  // the options are plain vote buttons ("Results after you vote").
+  const renderPoll = (p: any) => {
+    const tally = p.tally || {};
+    const total = p.votes || 0;
+    const showResults = p.results !== "afterVote" || !!p.myVote || !p.active || admin;
+    const max = Math.max(0, ...(p.options || []).map((o: any) => tally[o.id] || 0));
+    const myOpt = (p.options || []).find((o: any) => o.id === p.myVote);
+    return (
+      <View key={p.id} style={[s.qCard, s.pollCard, !p.active && { opacity: 0.8 }]}>
+        <View style={s.pollHead}>
+          <Text style={s.pollTitle} numberOfLines={2}>{p.title || "Poll"}</Text>
+          <View style={[s.pollBadge, p.active ? s.pollBadgeOn : s.pollBadgeOff]}><Text style={[s.pollBadgeT, { color: p.active ? C.accent : C.muted }]}>{p.active ? "ACTIVE" : "CLOSED"}</Text></View>
+        </View>
+        <Text style={s.qText}>{p.question}</Text>
+        <Text style={s.pollMeta}>{total} vote{total === 1 ? "" : "s"}{p.results === "afterVote" ? "  ·  results after voting" : ""}</Text>
+        {(p.options || []).map((o: any) => {
+          const n = tally[o.id] || 0;
+          const pct = total > 0 ? Math.round((n / total) * 100) : 0;
+          const lead = showResults && n > 0 && n === max;
+          const mine = p.myVote === o.id;
+          return (
+            <TouchableOpacity key={o.id} disabled={!p.active} activeOpacity={0.7} style={[s.pollOpt, mine && s.pollOptMine]} onPress={() => sessions.votePoll(openHash!, p.id, o.id).catch(() => {})}>
+              {showResults ? <View style={[s.pollBar, { width: `${pct}%` }, lead && s.pollBarLead]} /> : null}
+              <Text style={[s.pollOptT, lead && { color: C.primary, fontWeight: "800" }]} numberOfLines={2}>{mine ? "✓ " : ""}{o.title || "(untitled)"}</Text>
+              {showResults ? <Text style={s.pollOptN}>{n} · {pct}%</Text> : null}
+            </TouchableOpacity>
+          );
+        })}
+        {!showResults ? <Text style={s.pollHint}>Results after you vote</Text> : null}
+        {myOpt ? <Text style={s.pollMine}>✓ You voted “{myOpt.title}”{p.active ? " · tap another option to change" : ""}</Text> : null}
+        {!p.active && !myOpt ? <Text style={s.pollHint}>Voting is closed</Text> : null}
+        {admin ? (
+          <View style={s.adminRow}>
+            <TouchableOpacity onPress={() => sessions.setPollActive(openHash!, p.id, !p.active).catch(() => {})}><Text style={s.adminAction}>{p.active ? "Close" : "Open"}</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => confirmDeletePoll(p)}><Text style={[s.adminAction, { color: C.danger }]}>Delete</Text></TouchableOpacity>
+          </View>
+        ) : null}
+      </View>
+    );
+  };
   return (
     <SafeAreaView style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
@@ -354,15 +405,23 @@ function AppInner() {
             <Text style={[s.adminChipT, !sessions.sessionOpen(openHash) && { color: C.danger }]}>{sessions.sessionOpen(openHash) ? "● Open — tap to close" : "○ Closed — tap to open"}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={s.adminChip} onPress={() => { setAdminInput(""); setAdminModal(true); }}><Text style={s.adminChipT}>Admins ({sessions.adminsOf(openHash).length})</Text></TouchableOpacity>
+          <TouchableOpacity style={s.adminChip} onPress={() => setPollModal(true)}><Text style={s.adminChipT}>+ Poll</Text></TouchableOpacity>
         </View>
       ) : (!sessions.sessionOpen(openHash) ? <Text style={s.closedHint}>🔒 This Q&A is closed — new questions are disabled</Text> : null)}
-      {sessions.sessionOpen(openHash) ? (
+      {roomTab === "questions" && sessions.sessionOpen(openHash) ? (
         <View style={s.askRow}>
           <TextInput style={s.input} placeholder="Ask a question…" placeholderTextColor={C.muted} value={q} onChangeText={setQ} />
           <TouchableOpacity style={s.btnPrimary} onPress={() => { const v = q.trim(); if (v) sessions.ask(openHash, v).catch(() => {}); setQ(""); }}><Text style={s.btnPrimaryT}>Ask</Text></TouchableOpacity>
         </View>
       ) : null}
       <View style={s.controls}>
+        <View style={s.chipRow}>
+          <Text style={s.chipLabel}>View</Text>
+          {(["questions", "polls"] as const).map((k) => (
+            <TouchableOpacity key={k} style={[s.chip, roomTab === k && s.chipOn]} onPress={() => setRoomTab(k)}><Text style={[s.chipT, roomTab === k && s.chipTOn]}>{k === "questions" ? "Questions" : `Polls (${polls.length})`}</Text></TouchableOpacity>
+          ))}
+        </View>
+        {roomTab === "questions" ? <>
         <View style={s.chipRow}>
           <Text style={s.chipLabel}>Sort</Text>
           {(["top", "new", "old"] as const).map((k) => (
@@ -375,8 +434,13 @@ function AppInner() {
             <TouchableOpacity key={k} style={[s.chip, filterBy === k && s.chipOn]} onPress={() => setFilterBy(k)}><Text style={[s.chipT, filterBy === k && s.chipTOn]}>{k === "all" ? "All" : k === "unanswered" ? "Unanswered" : "Answered"}</Text></TouchableOpacity>
           ))}
         </View>
+        </> : null}
       </View>
       <ScrollView style={{ flex: 1 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} colors={[C.primary]} progressBackgroundColor={C.surface} />}>
+        {roomTab === "polls" ? <>
+          {polls.length === 0 ? <Text style={s.empty}>{admin ? "No polls yet — tap “+ Poll” to create one." : "No polls yet."}</Text> : null}
+          {polls.map(renderPoll)}
+        </> : <>
         {shownQ.length === 0 ? <Text style={s.empty}>{allQ.length === 0 ? "No questions yet — be the first to ask." : "Nothing matches this filter."}</Text> : null}
         {shownQ.map(renderQ)}
         {hiddenQ.length > 0 ? (
@@ -387,6 +451,7 @@ function AppInner() {
             {hiddenOpen ? hiddenQ.map(renderQ) : null}
           </View>
         ) : null}
+        </>}
       </ScrollView>
       <SharedNodeStatus appName="QAKU" />
       <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic={openHash} />
@@ -394,6 +459,7 @@ function AppInner() {
       {renderScanner(scanning, setScanning, onScanned)}
       {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName, sessions.myAddress, copy)}
       {renderAdminModal(adminModal, setAdminModal, openHash, adminInput, setAdminInput, copy)}
+      <PollModal open={pollModal} onClose={() => setPollModal(false)} hash={openHash} onCreated={() => setRoomTab("polls")} />
     </SafeAreaView>
   );
 }
@@ -510,6 +576,66 @@ function renderAdminModal(open: boolean, setOpen: (v: boolean) => void, hash: st
   );
 }
 
+// Owner/admin "Create poll" form: optional title, required question, >= 2 options
+// (add/remove), active-now switch and results visibility. A component (not a render
+// function) so the draft lives in its own state and survives the room's 3 s re-render.
+function PollModal({ open, onClose, hash, onCreated }: { open: boolean; onClose: () => void; hash: string; onCreated: () => void }) {
+  const [title, setTitle] = useState("");
+  const [question, setQuestion] = useState("");
+  const [options, setOptions] = useState<string[]>(["", ""]);
+  const [active, setActive] = useState(true);
+  const [results, setResults] = useState<"always" | "afterVote">("always");
+  const [err, setErr] = useState("");
+  const reset = () => { setTitle(""); setQuestion(""); setOptions(["", ""]); setActive(true); setResults("always"); setErr(""); };
+  const create = () => {
+    const opts = options.map((o) => o.trim()).filter(Boolean);
+    if (!question.trim()) { setErr("Enter a question."); return; }
+    if (opts.length < 2) { setErr("Add at least 2 options."); return; }
+    sessions.createPoll(hash, { title, question, options: opts, active, results }).catch(() => {});
+    reset(); onClose(); onCreated();
+  };
+  return (
+    <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={s.modalWrap}><View style={[s.modalCard, { maxHeight: "90%" }]}>
+        <ScrollView keyboardShouldPersistTaps="handled">
+          <Text style={s.modalTitle}>Create poll</Text>
+          <Text style={s.modalHint}>Everyone in this Q&A can vote once (and change their vote). Only vote counts are shown — never who voted for what.</Text>
+          <Text style={s.addrLabel}>Title (optional)</Text>
+          <TextInput style={[s.modalInput, { marginTop: 6 }]} placeholder="e.g. Lunch" placeholderTextColor={C.muted} value={title} onChangeText={setTitle} />
+          <Text style={[s.addrLabel, { marginTop: 12 }]}>Question</Text>
+          <TextInput style={[s.modalInput, { marginTop: 6 }]} placeholder="What should we ask?" placeholderTextColor={C.muted} value={question} onChangeText={setQuestion} multiline />
+          <Text style={[s.addrLabel, { marginTop: 12 }]}>Options</Text>
+          {options.map((o, i) => (
+            <View key={i} style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+              <TextInput style={[s.modalInput, { flex: 1 }]} placeholder={`Option ${i + 1}`} placeholderTextColor={C.muted} value={o} onChangeText={(v) => setOptions((cur) => cur.map((x, j) => (j === i ? v : x)))} />
+              {options.length > 2 ? <TouchableOpacity hitSlop={8} onPress={() => setOptions((cur) => cur.filter((_, j) => j !== i))}><Text style={s.removeT}>✕</Text></TouchableOpacity> : null}
+            </View>
+          ))}
+          <TouchableOpacity onPress={() => setOptions((cur) => [...cur, ""])}><Text style={[s.adminAction, { marginTop: 8 }]}>+ Add option</Text></TouchableOpacity>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 14 }}>
+            <Text style={s.addrLabel}>Active now</Text>
+            <Switch value={active} onValueChange={setActive} trackColor={{ true: C.accent, false: C.input }} thumbColor={active ? C.primary : C.muted} />
+          </View>
+          <Text style={[s.addrLabel, { marginTop: 12 }]}>Results</Text>
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
+            {([["Always", "always"], ["After voting", "afterVote"]] as const).map(([lbl, v]) => (
+              <TouchableOpacity key={v} style={[s.modeChip, results === v && s.modeChipOn]} onPress={() => setResults(v)}>
+                <Text style={[s.modeChipT, results === v && s.modeChipTOn]}>{lbl}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={s.modeHint}>{results === "afterVote" ? "Participants see the counts only after they vote (or once the poll is closed)." : "Everyone sees the live counts."}</Text>
+          {err ? <Text style={s.error}>{err}</Text> : null}
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
+            <TouchableOpacity style={[s.btnGhost, { flex: 1, minHeight: 44 }]} onPress={() => { setErr(""); onClose(); }}><Text style={s.btnGhostT}>Cancel</Text></TouchableOpacity>
+            <TouchableOpacity style={[s.btnPrimary, { flex: 1, minHeight: 44 }]} onPress={create}><Text style={s.btnPrimaryT}>Create</Text></TouchableOpacity>
+          </View>
+        </ScrollView>
+      </View></View>
+    </Modal>
+  );
+}
+
 function renderScanner(scanning: boolean, setScanning: (v: boolean) => void, onScanned: (d: string) => void) {
   return (
     <Modal visible={scanning} animationType="slide" onRequestClose={() => setScanning(false)}>
@@ -621,6 +747,23 @@ const s = StyleSheet.create({
   chipOn: { backgroundColor: C.primary, borderColor: C.primary },
   chipT: { color: C.muted, fontSize: 12, fontWeight: "600" },
   chipTOn: { color: C.primaryFg, fontWeight: "800" },
+  // polls
+  pollCard: { flexDirection: "column", gap: 0 },
+  pollHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 },
+  pollTitle: { color: C.text, fontSize: 16, fontWeight: "800", flex: 1 },
+  pollBadge: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1 },
+  pollBadgeOn: { borderColor: C.accent },
+  pollBadgeOff: { borderColor: C.border },
+  pollBadgeT: { fontSize: 10, fontWeight: "800" },
+  pollMeta: { color: C.muted, fontSize: 12, marginTop: 4, marginBottom: 6 },
+  pollOpt: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, backgroundColor: C.surface2, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, marginTop: 6, borderWidth: 1, borderColor: C.border, overflow: "hidden" },
+  pollOptMine: { borderColor: C.accent },
+  pollBar: { position: "absolute", left: 0, top: 0, bottom: 0, backgroundColor: C.input },
+  pollBarLead: { backgroundColor: "rgba(255,197,51,0.22)" },
+  pollOptT: { color: C.text, fontSize: 14, flex: 1 },
+  pollOptN: { color: C.muted, fontSize: 12, fontWeight: "700" },
+  pollHint: { color: C.muted, fontSize: 12, marginTop: 8, fontStyle: "italic" },
+  pollMine: { color: C.accent, fontSize: 12, fontWeight: "700", marginTop: 8 },
   // hidden section
   hiddenSection: { marginTop: 8, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 8 },
   hiddenHead: { paddingVertical: 8 },
