@@ -14,7 +14,8 @@ import Logos.Controls
 // Layout mirrors the original qaku web app: a LEFT SIDEBAR (app header, a
 // "+ New Q&A" button, a Join-by-secret affordance, a scrollable list of your
 // sessions, a Settings area, a status line) + a MAIN PANE showing the selected
-// session (header, Share card, Ask box, questions, polls).
+// session (header, Share card, a Questions | Polls tab row, then the Ask box + questions
+// or the owner/admin New-poll card + poll cards).
 //
 // Styling uses the official Logos design system (Logos.Theme + Logos.Controls),
 // consumed like perun/module/src/qml/Main.qml - no hardcoded colours or spacing,
@@ -341,13 +342,86 @@ Item {
             else root.toast((err || "Action failed - check qaku_core") + (detail ? (" (" + detail + ")") : ""));
         });
     }
-    // ---- delete a Q&A (local removal via qaku_core.deleteSession), gated by a confirm step ----
+    // ---- delete a Q&A (local removal via qaku_core.deleteSession) or a poll (deletePoll, synced),
+    // gated by ONE shared confirm overlay; confirmDeleteKind picks which ("session" | "poll") ----
     property string confirmDeleteId: ""
     property string confirmDeleteTitle: ""
-    function askDelete(id, title) { root.confirmDeleteId = id || ""; root.confirmDeleteTitle = title || "Untitled Q&A"; }
+    property string confirmDeleteKind: "session"
+    function askDelete(id, title) { root.confirmDeleteKind = "session"; root.confirmDeleteId = id || ""; root.confirmDeleteTitle = title || "Untitled Q&A"; }
+    function askDeletePoll(id, title) { root.confirmDeleteKind = "poll"; root.confirmDeleteId = id || ""; root.confirmDeleteTitle = title || "Untitled poll"; }
     function doDelete() {
         var id = root.confirmDeleteId; root.confirmDeleteId = "";
-        if (id.length > 0) root.act("deleteSession", [id], "Could not delete Q&A", function () { root.toast("Q&A deleted"); });
+        if (id.length === 0) return;
+        if (root.confirmDeleteKind === "poll")
+            root.act("deletePoll", [id], "Could not delete poll", function () { root.toast("Poll deleted"); });
+        else
+            root.act("deleteSession", [id], "Could not delete Q&A", function () { root.toast("Q&A deleted"); });
+    }
+
+    // ---- polls (qaku_core createPoll / setPollActive / deletePoll / votePoll) ----
+    property string paneView: "questions"      // main-pane tab: questions | polls
+    // owner/admin may create/close/delete polls. The core's adminGuard checks st.admins (which
+    // includes the owner); st.role is the same fact from roleFor - accept either.
+    readonly property bool canManagePolls: root.isAdmin || root.st.role === "owner" || root.st.role === "admin"
+    // newest first; the core's order is fold order
+    readonly property var sortedPolls: root.polls.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); })
+    function hasVoted(p) { return !!p && p.myVote !== undefined && p.myVote !== null && p.myVote !== ""; }
+    // Visibility rule: counts are shown if results are public, you voted, the poll is closed, or
+    // you run the session. Otherwise vote buttons only (+ "Results after you vote"). Counts only -
+    // the snapshot never says who voted.
+    function pollShowsResults(p) { return !!p && (p.results === "always" || root.hasVoted(p) || !p.active || root.canManagePolls); }
+    function pollCount(p, oid) { return (p && p.tally && p.tally[oid] !== undefined) ? (Number(p.tally[oid]) || 0) : 0; }
+    function pollMax(p) {
+        var m = 0, os = (p && p.options) ? p.options : [];
+        for (var i = 0; i < os.length; i++) m = Math.max(m, root.pollCount(p, os[i].id));
+        return m;
+    }
+    function pollOptionTitle(p, oid) {
+        var os = (p && p.options) ? p.options : [];
+        for (var i = 0; i < os.length; i++) if (os[i].id === oid) return os[i].title;
+        return "";
+    }
+    // New-poll form. The options live in a root-level ListModel; pollOptsRev bumps on every edit so
+    // the validation binding re-evaluates (ListModel.setProperty does not notify JS bindings).
+    property bool pollFormOpen: false
+    property bool pollFormActive: true
+    property string pollFormResults: "always"   // always | afterVote
+    property int pollOptsRev: 0
+    ListModel { id: pollOpts; ListElement { label: "" } ListElement { label: "" } }
+    function pollOptionTexts() {
+        var out = [];
+        for (var i = 0; i < pollOpts.count; i++) { var t = String(pollOpts.get(i).label || "").trim(); if (t.length > 0) out.push(t); }
+        return out;
+    }
+    readonly property string pollFormProblem: {
+        void root.pollOptsRev;
+        if (pollQuestionField.text.trim().length === 0) return "Enter a question";
+        var opts = root.pollOptionTexts();
+        if (opts.length < 2) return "Add at least 2 options";
+        for (var i = 0; i < opts.length; i++)
+            if (opts.indexOf(opts[i]) !== i) return "Options must be different (\"" + opts[i] + "\" is repeated)";
+        return "";
+    }
+    function addPollOpt() { pollOpts.append({ label: "" }); root.pollOptsRev++; }
+    function setPollOpt(i, t) { if (i >= 0 && i < pollOpts.count) { pollOpts.setProperty(i, "label", t); root.pollOptsRev++; } }
+    function removePollOpt(i) { if (i >= 0 && i < pollOpts.count && pollOpts.count > 2) { pollOpts.remove(i); root.pollOptsRev++; } }
+    function resetPollForm() {
+        pollTitleField.text = ""; pollQuestionField.text = "";
+        pollOpts.clear(); pollOpts.append({ label: "" }); pollOpts.append({ label: "" });
+        root.pollFormActive = true; root.pollFormResults = "always"; root.pollOptsRev++;
+    }
+    function submitPoll() {
+        if (root.pollFormProblem !== "") { root.toast(root.pollFormProblem); return; }
+        var settings = { results: root.pollFormResults };
+        var t = pollTitleField.text.trim();
+        if (t.length > 0) settings.title = t;
+        root.mutate("createPoll",
+                    [pollQuestionField.text.trim(), JSON.stringify(root.pollOptionTexts()),
+                     root.pollFormActive ? "true" : "false", JSON.stringify(settings)],
+                    function (ok, detail) {
+                        if (ok) { root.resetPollForm(); root.pollFormOpen = false; root.toast("Poll created"); }
+                        else root.toast("Could not create poll" + (detail ? (" (" + detail + ")") : ""));
+                    });
     }
 
     Rectangle { anchors.fill: parent; color: root.qkBg }
@@ -1039,8 +1113,29 @@ Item {
                     }
                 }
 
+                // ---- view tabs: Questions | Polls (same chip look as sort/filter) ----
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.spacing.tiny
+                    Repeater {
+                        model: [{ k: "questions", l: "Questions (" + root.questions.filter(function (x) { return !x.moderated; }).length + ")" },
+                                { k: "polls", l: "Polls (" + root.polls.length + ")" }]
+                        delegate: Rectangle {
+                            radius: 16; implicitHeight: 32; implicitWidth: tabChipTxt.implicitWidth + 28
+                            color: modelData.k === root.paneView ? root.qkGold : root.qkSurface
+                            border.color: root.qkBorder; border.width: 1
+                            LogosText { id: tabChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.primaryText
+                                font.weight: Theme.typography.weightMedium
+                                color: modelData.k === root.paneView ? root.qkBg : root.qkMuted }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.paneView = modelData.k }
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+
                 // ---- Ask a question ----
                 RowLayout {
+                    visible: root.paneView === "questions"
                     Layout.fillWidth: true
                     spacing: Theme.spacing.small
                     AppField {
@@ -1066,6 +1161,7 @@ Item {
 
                 // ---- sort / filter controls (OG qaku) ----
                 RowLayout {
+                    visible: root.paneView === "questions"
                     Layout.fillWidth: true
                     spacing: Theme.spacing.medium
                     RowLayout {
@@ -1102,6 +1198,7 @@ Item {
                 // ---- Questions ----
                 ListView {
                     id: qList
+                    visible: root.paneView === "questions"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
@@ -1343,48 +1440,360 @@ Item {
                     }
                 }
 
-                // ---- Polls ----
-                Repeater {
-                    model: root.polls
-                    delegate: Rectangle {
-                        Layout.fillWidth: true
-                        radius: Theme.spacing.radiusMedium
-                        color: Theme.palette.backgroundInset
-                        border.color: Theme.palette.borderHairline; border.width: 1
-                        implicitHeight: pcol.implicitHeight + 2 * Theme.spacing.medium
-                        property var poll: modelData
-                        ColumnLayout {
-                            id: pcol
-                            anchors.left: parent.left; anchors.right: parent.right
-                            anchors.top: parent.top; anchors.margins: Theme.spacing.medium
-                            spacing: Theme.spacing.small
-                            LogosText {
-                                text: poll.question + (poll.active ? "" : "   (closed)") + "   -   " + (poll.votes || 0) + " votes"
-                                color: Theme.palette.text
-                                font.pixelSize: Theme.typography.primaryText
-                                font.weight: Theme.typography.weightMedium
-                            }
-                            Repeater {
-                                model: poll.options ? poll.options : []
-                                delegate: RowLayout {
+                // ---- Polls pane (tab) ----
+                // Every call goes through root.act/mutate (async, de-duplicated, result applied
+                // deferred) - a card's handler never reassigns its own model synchronously.
+                Flickable {
+                    id: pollsFlick
+                    visible: root.paneView === "polls"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    contentWidth: width
+                    contentHeight: pollsCol.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    ColumnLayout {
+                        id: pollsCol
+                        width: pollsFlick.width
+                        spacing: Theme.spacing.small
+
+                        // ---- owner/admin: collapsible "New poll" card ----
+                        Rectangle {
+                            visible: root.canManagePolls
+                            Layout.fillWidth: true
+                            radius: Theme.spacing.radiusMedium
+                            color: root.qkSurface
+                            border.color: root.pollFormOpen ? root.qkGold : root.qkBorder
+                            border.width: 1
+                            implicitHeight: npCol.implicitHeight + 2 * Theme.spacing.medium
+
+                            ColumnLayout {
+                                id: npCol
+                                anchors.left: parent.left; anchors.right: parent.right
+                                anchors.top: parent.top; anchors.margins: Theme.spacing.medium
+                                spacing: Theme.spacing.small
+
+                                Item {
+                                    Layout.fillWidth: true
+                                    implicitHeight: npHead.implicitHeight
+                                    LogosText {
+                                        id: npHead
+                                        text: (root.pollFormOpen ? "▾  " : "▸  ") + "New poll"
+                                        color: root.qkGold
+                                        font.pixelSize: Theme.typography.primaryText
+                                        font.weight: Theme.typography.weightMedium
+                                    }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.pollFormOpen = !root.pollFormOpen }
+                                }
+
+                                ColumnLayout {
+                                    visible: root.pollFormOpen
                                     Layout.fillWidth: true
                                     spacing: Theme.spacing.small
-                                    property var opt: modelData
-                                    LogosButton {
-                                        text: opt.title
-                                        implicitWidth: 140; implicitHeight: 36
-                                        enabled: poll.active
-                                        onClicked: root.act("votePoll", [poll.id, opt.id], "Could not vote")
+
+                                    LogosText { text: "Title (optional)"; color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
+                                    AppField {
+                                        id: pollTitleField
+                                        objectName: "pollTitleField"
+                                        Layout.fillWidth: true
+                                        implicitHeight: 36
+                                        placeholderText: "e.g. Feature priority vote"
+                                    }
+                                    LogosText { text: "Question *"; color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
+                                    AppField {
+                                        id: pollQuestionField
+                                        objectName: "pollQuestionField"
+                                        Layout.fillWidth: true
+                                        implicitHeight: 38
+                                        placeholderText: "What do you want to ask?"
+                                    }
+                                    LogosText { text: "Options * (at least 2)"; color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
+                                    Repeater {
+                                        model: pollOpts
+                                        delegate: RowLayout {
+                                            id: optRow
+                                            required property int index
+                                            required property string label
+                                            Layout.fillWidth: true
+                                            spacing: Theme.spacing.small
+                                            LogosText {
+                                                Layout.preferredWidth: 70
+                                                text: "Option " + (optRow.index + 1)
+                                                color: root.qkMuted
+                                                font.pixelSize: Theme.typography.secondaryText
+                                            }
+                                            AppField {
+                                                Layout.fillWidth: true
+                                                implicitHeight: 34
+                                                placeholderText: "Option " + (optRow.index + 1)
+                                                text: optRow.label
+                                                onTextEdited: root.setPollOpt(optRow.index, text)
+                                            }
+                                            // Remove: DEFERRED - removing the row destroys this delegate,
+                                            // which must not happen while its own handler is running.
+                                            Rectangle {
+                                                Layout.preferredWidth: 26; Layout.preferredHeight: 26
+                                                radius: 13
+                                                opacity: pollOpts.count > 2 ? 1 : 0.35
+                                                color: rmOptMa.containsMouse && pollOpts.count > 2 ? Theme.palette.overlayOrange : "transparent"
+                                                border.color: rmOptMa.containsMouse && pollOpts.count > 2 ? Theme.palette.error : Theme.palette.borderHairline
+                                                border.width: 1
+                                                LogosText { anchors.centerIn: parent; text: "×"; color: Theme.palette.textTertiary; font.pixelSize: Theme.typography.primaryText }
+                                                MouseArea {
+                                                    id: rmOptMa; anchors.fill: parent; hoverEnabled: true
+                                                    enabled: pollOpts.count > 2
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: { var i = optRow.index; Qt.callLater(function () { root.removePollOpt(i); }); }
+                                                }
+                                            }
+                                        }
                                     }
                                     LogosText {
-                                        Layout.fillWidth: true
-                                        color: Theme.palette.textSecondary
+                                        text: "+ Add option"
+                                        color: root.qkTeal
                                         font.pixelSize: Theme.typography.secondaryText
-                                        text: (poll.tally && poll.tally[opt.id] !== undefined) ? ("" + poll.tally[opt.id]) : "0"
+                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.addPollOpt() }
+                                    }
+
+                                    // Active now + results visibility: chips, not CheckBox/ComboBox (only
+                                    // LogosText/LogosButton load reliably across Basecamp versions).
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Layout.topMargin: Theme.spacing.tiny
+                                        spacing: Theme.spacing.tiny
+                                        Rectangle {
+                                            radius: 14; implicitHeight: 28; implicitWidth: actChipTxt.implicitWidth + 22
+                                            color: root.pollFormActive ? root.qkGold : root.qkSurface
+                                            border.color: root.pollFormActive ? root.qkGold : root.qkBorder; border.width: 1
+                                            LogosText { id: actChipTxt; anchors.centerIn: parent
+                                                text: (root.pollFormActive ? "✓ " : "") + "Active now"
+                                                font.pixelSize: Theme.typography.secondaryText
+                                                color: root.pollFormActive ? root.qkBg : root.qkMuted }
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.pollFormActive = !root.pollFormActive }
+                                        }
+                                        Item { Layout.preferredWidth: Theme.spacing.medium }
+                                        LogosText { text: "Results"; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                                        Repeater {
+                                            model: [{ k: "always", l: "Always" }, { k: "afterVote", l: "After voting" }]
+                                            delegate: Rectangle {
+                                                radius: 14; implicitHeight: 28; implicitWidth: resChipTxt.implicitWidth + 22
+                                                color: modelData.k === root.pollFormResults ? root.qkGold : root.qkSurface
+                                                border.color: root.qkBorder; border.width: 1
+                                                LogosText { id: resChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.secondaryText
+                                                    color: modelData.k === root.pollFormResults ? root.qkBg : root.qkMuted }
+                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.pollFormResults = modelData.k }
+                                            }
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Layout.topMargin: Theme.spacing.tiny
+                                        spacing: Theme.spacing.small
+                                        LogosText {
+                                            Layout.fillWidth: true
+                                            text: root.pollFormProblem
+                                            color: root.qkGold
+                                            font.pixelSize: Theme.typography.secondaryText
+                                            wrapMode: Text.WordWrap
+                                        }
+                                        LogosButton {
+                                            text: "Cancel"
+                                            implicitWidth: 92; implicitHeight: 38
+                                            onClicked: { root.resetPollForm(); root.pollFormOpen = false; }
+                                        }
+                                        LogosButton {
+                                            text: root.isBusy("createPoll") ? "Creating..." : "Create poll"
+                                            implicitWidth: 130; implicitHeight: 38
+                                            enabled: root.pollFormProblem === "" && !root.isBusy("createPoll")
+                                            onClicked: root.submitPoll()
+                                        }
                                     }
                                 }
                             }
                         }
+
+                        LogosText {
+                            visible: root.polls.length === 0
+                            Layout.fillWidth: true
+                            Layout.topMargin: Theme.spacing.large
+                            horizontalAlignment: Text.AlignHCenter
+                            text: root.canManagePolls ? "No polls yet - create one above" : "No polls yet"
+                            color: Theme.palette.textTertiary
+                            font.pixelSize: Theme.typography.primaryText
+                        }
+
+                        // ---- one card per poll ----
+                        Repeater {
+                            model: root.sortedPolls
+                            delegate: Rectangle {
+                                id: pCard
+                                property var poll: modelData
+                                readonly property bool showRes: root.pollShowsResults(poll)
+                                readonly property int total: poll.votes || 0
+                                readonly property int topCount: root.pollMax(poll)
+                                readonly property bool voted: root.hasVoted(poll)
+                                Layout.fillWidth: true
+                                radius: Theme.spacing.radiusMedium
+                                color: root.qkSurface
+                                border.color: root.qkBorder
+                                border.width: 1
+                                opacity: poll.active ? 1 : 0.85
+                                implicitHeight: pcol.implicitHeight + 2 * Theme.spacing.medium
+
+                                ColumnLayout {
+                                    id: pcol
+                                    anchors.left: parent.left; anchors.right: parent.right
+                                    anchors.top: parent.top; anchors.margins: Theme.spacing.medium
+                                    spacing: Theme.spacing.small
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Theme.spacing.medium
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 2
+                                            LogosText {
+                                                visible: !!pCard.poll.title
+                                                Layout.fillWidth: true
+                                                text: pCard.poll.title || ""
+                                                color: root.qkGold
+                                                font.pixelSize: Theme.typography.secondaryText
+                                                font.weight: Theme.typography.weightBold
+                                                elide: Text.ElideRight
+                                            }
+                                            LogosText {
+                                                Layout.fillWidth: true
+                                                text: pCard.poll.question || ""
+                                                color: root.qkText
+                                                font.pixelSize: Theme.typography.primaryText
+                                                font.weight: Theme.typography.weightMedium
+                                                wrapMode: Text.WordWrap
+                                            }
+                                        }
+                                        Rectangle {
+                                            Layout.alignment: Qt.AlignTop
+                                            radius: 10
+                                            implicitWidth: stLbl.implicitWidth + 16; implicitHeight: 20
+                                            color: pCard.poll.active ? "transparent" : root.qkSurface2
+                                            border.color: pCard.poll.active ? root.qkTeal : root.qkBorder; border.width: 1
+                                            LogosText { id: stLbl; anchors.centerIn: parent
+                                                text: pCard.poll.active ? "● ACTIVE" : "CLOSED"
+                                                color: pCard.poll.active ? root.qkTeal : root.qkMuted
+                                                font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
+                                        }
+                                    }
+
+                                    LogosText {
+                                        text: pCard.total + (pCard.total === 1 ? " vote" : " votes")
+                                              + (pCard.poll.results === "afterVote" ? "   ·   results after voting" : "")
+                                              + (pCard.poll.ts ? "   ·   " + root.timeAgo(pCard.poll.ts) : "")
+                                        color: root.qkMuted
+                                        font.pixelSize: Theme.typography.secondaryText
+                                    }
+
+                                    Repeater {
+                                        model: pCard.poll.options ? pCard.poll.options : []
+                                        delegate: RowLayout {
+                                            id: oRow
+                                            property var opt: modelData
+                                            readonly property int n: root.pollCount(pCard.poll, opt.id)
+                                            readonly property bool mine: pCard.poll.myVote === opt.id
+                                            readonly property bool leads: pCard.showRes && pCard.topCount > 0 && n === pCard.topCount
+                                            readonly property real frac: pCard.total > 0 ? n / pCard.total : 0
+                                            Layout.fillWidth: true
+                                            spacing: Theme.spacing.small
+
+                                            LogosButton {
+                                                text: oRow.mine ? "✓ Voted" : "Vote"
+                                                implicitWidth: 92; implicitHeight: 38
+                                                enabled: pCard.poll.active && !oRow.mine && !root.isBusy("votePoll")
+                                                onClicked: root.act("votePoll", [pCard.poll.id, oRow.opt.id], "Could not vote")
+                                            }
+                                            // option row with a result bar underneath (width ∝ tally / votes)
+                                            Rectangle {
+                                                Layout.fillWidth: true
+                                                implicitHeight: 38
+                                                radius: Theme.spacing.radiusSmall
+                                                color: root.qkBg
+                                                border.color: oRow.mine ? root.qkTeal : (oRow.leads ? root.qkGold : root.qkBorder)
+                                                border.width: 1
+                                                clip: true
+                                                Rectangle {
+                                                    visible: pCard.showRes
+                                                    anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+                                                    anchors.margins: 1
+                                                    width: Math.max(0, (parent.width - 2) * oRow.frac)
+                                                    radius: Theme.spacing.radiusSmall
+                                                    color: oRow.leads ? root.qkGold : root.qkTeal
+                                                    opacity: oRow.leads ? 0.32 : 0.22
+                                                }
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.leftMargin: Theme.spacing.medium; anchors.rightMargin: Theme.spacing.medium
+                                                    spacing: Theme.spacing.small
+                                                    LogosText {
+                                                        Layout.fillWidth: true
+                                                        text: oRow.opt.title + (oRow.mine ? "   ✓ your vote" : "")
+                                                        color: oRow.mine ? root.qkTeal : root.qkText
+                                                        font.pixelSize: Theme.typography.secondaryText
+                                                        font.weight: oRow.leads ? Theme.typography.weightBold : Theme.typography.weightRegular
+                                                        elide: Text.ElideRight
+                                                    }
+                                                    LogosText {
+                                                        visible: pCard.showRes
+                                                        text: oRow.n + "   " + Math.round(oRow.frac * 100) + "%"
+                                                        color: oRow.leads ? root.qkGold : root.qkMuted
+                                                        font.pixelSize: Theme.typography.secondaryText
+                                                        font.weight: Theme.typography.weightMedium
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    LogosText {
+                                        visible: !pCard.showRes
+                                        text: "Results after you vote"
+                                        color: root.qkMuted
+                                        font.pixelSize: Theme.typography.secondaryText
+                                        font.italic: true
+                                    }
+                                    LogosText {
+                                        visible: pCard.voted
+                                        Layout.fillWidth: true
+                                        text: "You voted “" + root.pollOptionTitle(pCard.poll, pCard.poll.myVote) + "”"
+                                              + (pCard.poll.active ? " - pick another option to change it" : "")
+                                        color: root.qkTeal
+                                        font.pixelSize: Theme.typography.secondaryText
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    // owner/admin: compact text-link actions (same style as question admin actions)
+                                    RowLayout {
+                                        visible: root.canManagePolls
+                                        Layout.fillWidth: true
+                                        spacing: Theme.spacing.large
+                                        LogosText {
+                                            text: pCard.poll.active ? "Close poll" : "Reopen poll"
+                                            color: root.qkTeal; font.pixelSize: Theme.typography.secondaryText
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.act("setPollActive", [pCard.poll.id, pCard.poll.active ? "false" : "true"], "Could not change the poll") }
+                                        }
+                                        LogosText {
+                                            text: "Delete"
+                                            color: Theme.palette.error; font.pixelSize: Theme.typography.secondaryText
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.askDeletePoll(pCard.poll.id, pCard.poll.title || pCard.poll.question) }
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                    }
+                                }
+                            }
+                        }
+                        Item { Layout.preferredHeight: Theme.spacing.large }
                     }
                 }
             }
@@ -1436,13 +1845,15 @@ Item {
                 spacing: Theme.spacing.medium
                 LogosText {
                     Layout.fillWidth: true
-                    text: "Delete this Q&A?"
+                    text: root.confirmDeleteKind === "poll" ? "Delete this poll?" : "Delete this Q&A?"
                     color: Theme.palette.text; font.weight: Theme.typography.weightBold
                     font.pixelSize: Theme.typography.primaryText
                 }
                 LogosText {
                     Layout.fillWidth: true
-                    text: "“" + root.confirmDeleteTitle + "” will be removed from this device. This can't be undone."
+                    text: root.confirmDeleteKind === "poll"
+                          ? "“" + root.confirmDeleteTitle + "” and its votes will be deleted for everyone in this Q&A. This can't be undone."
+                          : "“" + root.confirmDeleteTitle + "” will be removed from this device. This can't be undone."
                     color: Theme.palette.textTertiary; wrapMode: Text.WordWrap
                     font.pixelSize: Theme.typography.secondaryText
                 }
