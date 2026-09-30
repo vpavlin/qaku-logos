@@ -95,6 +95,10 @@ function AppInner() {
   const [hiddenOpen, setHiddenOpen] = useState(false);
   // modals
   const [scanning, setScanning] = useState(false);
+  // One-shot latch: onBarcodeScanned fires on every camera frame until the modal's
+  // setScanning(false) re-renders, so a single scan could start several joins. Re-armed
+  // each time the scanner opens.
+  const scanLatch = React.useRef(false);
   const [shareHash, setShareHash] = useState<string | null>(null);
   const [nameModal, setNameModal] = useState(false);
   const [nameText, setNameText] = useState("");
@@ -191,7 +195,12 @@ function AppInner() {
   };
   const openScanner = async () => {
     if (!permission?.granted) { const r = await requestPermission(); if (!r.granted) { setError("Camera access needed to scan."); return; } }
-    setError(""); setScanning(true);
+    setError(""); scanLatch.current = false; setScanning(true);
+  };
+  const onScanned = (d: string) => {
+    if (scanLatch.current) return;
+    scanLatch.current = true;
+    setScanning(false); doJoin(d);
   };
   const saveName = async () => { setNameModal(false); await sessions.setName(nameText.trim()); };
 
@@ -243,7 +252,7 @@ function AppInner() {
         <SharedNodeStatus appName="QAKU" />
         <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic="" />
         <LoamDebug appName="QAKU" extra={() => ({ rooms: rooms.length, syncing: sessions.syncing ? "yes" : "no" })} />
-        {renderScanner(scanning, setScanning, (d) => { setScanning(false); doJoin(d); })}
+        {renderScanner(scanning, setScanning, onScanned)}
         {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName, sessions.myAddress, copy)}
       </SafeAreaView>
     );
@@ -382,7 +391,7 @@ function AppInner() {
       <SharedNodeStatus appName="QAKU" />
       <SyncLine status={status} show={showDiag} onToggle={() => setShowDiag((v) => !v)} topic={openHash} />
       {renderShare(shareHash, setShareHash)}
-      {renderScanner(scanning, setScanning, (d) => { setScanning(false); doJoin(d); })}
+      {renderScanner(scanning, setScanning, onScanned)}
       {renderNameModal(nameModal, setNameModal, nameText, setNameText, saveName, sessions.myAddress, copy)}
       {renderAdminModal(adminModal, setAdminModal, openHash, adminInput, setAdminInput, copy)}
     </SafeAreaView>
@@ -425,8 +434,8 @@ function renderNameModal(open: boolean, setOpen: (v: boolean) => void, text: str
           })}
         </View>
         <Text style={s.modeHint}>{sessions.nodeMode === "Edge"
-          ? "Edge: lighter on battery/data — no relay, publishes via lightpush. Experimental. Relaunch the app to apply."
-          : "Core: full node, relays traffic for the network. The reliable default. Relaunch the app to apply a change."}</Text>
+          ? "Edge (default): lighter on battery/data — no relay, publishes via lightpush. Relaunch the app to apply a change."
+          : "Core: full node, relays traffic for the network — heavier on battery/data. Relaunch the app to apply."}</Text>
         <Text style={[s.addrLabel, { marginTop: 14 }]}>Shared node (experimental)</Text>
         <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
           {([["Own node", false], ["Shared", true]] as const).map(([lbl, v]) => {

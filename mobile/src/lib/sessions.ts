@@ -71,7 +71,7 @@ export class Sessions {
   notifyAttempts = 0;   // diagnostic: how many times we've asked to fire a question notification
   myAddress = "";
   myName = "";
-  nodeMode: "Core" | "Edge" = "Core";
+  nodeMode: "Core" | "Edge" = "Edge";   // Edge is the default (start() reads the saved choice; only an explicit "Core" opts in)
   useSharedNode = true;    // route through the device-wide Loam node if installed (default on; "0" = user opted out)
   listeners = new Set<() => void>();
 
@@ -232,7 +232,11 @@ export class Sessions {
   }
 
   private ingest(room: Room, event: any) {
-    if (!event || room.ids.has(event.id)) return;
+    // Shape gate: the fold + HLC merge assume an id, a type and a {wall,dev} clock. A peer's
+    // malformed event must be dropped here, not crash every later render of this room.
+    if (!event || typeof event.id !== "string" || typeof event.type !== "string" || !event.hlc
+        || typeof event.hlc.wall !== "number" || typeof event.hlc.dev !== "string") return;
+    if (room.ids.has(event.id)) return;
     room.log = [...room.log, event];
     room.ids.add(event.id);
     try { room.clock.receive(event.hlc); } catch { /* */ }
@@ -247,7 +251,7 @@ export class Sessions {
       const st = this.state(room.meta.topicHash);
       // Prefer the folded Q&A title; fall back to a real meta title; never the "Q&A" placeholder.
       const title = (st.session && st.session.title) || (room.meta.title && room.meta.title !== "Q&A" ? room.meta.title : "QAKU");
-      this.onNewQuestion?.(room.meta.topicHash, (event.payload && event.payload.content) || "New question", title);
+      this.onNewQuestion?.(room.meta.topicHash, (event.payload && typeof event.payload.content === "string" && event.payload.content) || "New question", title);
     }
     this.emit();
   }
@@ -393,11 +397,26 @@ export class Sessions {
     return room.meta.topicHash;
   }
 
+  // In-flight joins by topicHash. joinRoom awaits (hydrate, registry, transport) before the
+  // room is registered, so two concurrent calls for the same secret (a double-tap, a QR
+  // scanned on consecutive frames) would both pass the "already joined" check and each
+  // register a room + author a profile.set. The second caller gets the first one's promise.
+  private joining = new Map<string, Promise<string>>();
+
   async joinRoom(secretInput: string): Promise<string> {
     const sh = extractSecret(secretInput).toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(sh)) throw new Error("Secret must be 64 hex chars or a qaku://join link.");
     const room = this.makeRoom({ topicHash: "", secretHex: sh, title: "Q&A" });
-    if (this.byHash.has(room.meta.topicHash)) return room.meta.topicHash; // already joined
+    const h = room.meta.topicHash;
+    if (this.byHash.has(h)) return h; // already joined
+    const inflight = this.joining.get(h);
+    if (inflight) return inflight;
+    const p = this.doJoinRoom(room).finally(() => { this.joining.delete(h); });
+    this.joining.set(h, p);
+    return p;
+  }
+
+  private async doJoinRoom(room: Room): Promise<string> {
     await this.hydrate(room);   // restore any prior local log for this room
     this.rooms.set(room.topic, room); this.byHash.set(room.meta.topicHash, room);
     await this.saveRegistry();
@@ -473,7 +492,9 @@ export class Sessions {
     const r = this.byHash.get(topicHash); if (!r) return { questions: [], polls: [], names: {} };
     const c = this.stateCache.get(topicHash);
     if (c && c.n === r.log.length) return c.st;
-    const st = computeState(r.log);
+    let st: any;
+    // Never let one bad event take the screen down: keep the last good fold (or an empty one).
+    try { st = computeState(r.log); } catch (e) { console.warn("qaku: fold failed", e); return c ? c.st : { questions: [], polls: [], names: {} }; }
     this.stateCache.set(topicHash, { n: r.log.length, st });
     return st;
   }
