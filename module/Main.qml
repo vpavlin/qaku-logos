@@ -58,12 +58,16 @@ Item {
         var o; try { o = JSON.parse(s); } catch (e) { return null; }
         return (o && o.error === undefined) ? o : null;
     }
-    // Multi-instance guard: never let an empty-state poll blank a populated view.
+    // Multi-instance guard: an empty state from a core that has not finished loading (status
+    // still "Starting...", before onContextReady read the data dir) must not blank a populated
+    // view. A READY core's empty state is real - e.g. deleteSession removed the last Q&A - and
+    // is applied. A failed call / error never reaches here (asState returns null).
     function eventCountOf(o) { return (o && o.eventCount) ? o.eventCount : 0; }
     function sessionCountOf(o) { return (o && o.sessions) ? o.sessions.length : 0; }
+    function coreReady(o) { return !!o && typeof o.status === "string" && o.status.length > 0 && o.status !== "Starting..."; }
     function apply(o) {
         if (!o) return;
-        if (eventCountOf(o) === 0 && sessionCountOf(o) === 0
+        if (eventCountOf(o) === 0 && sessionCountOf(o) === 0 && !coreReady(o)
             && (eventCountOf(root.st) > 0 || sessionCountOf(root.st) > 0)) return;
         root.st = o; root.stateJson = JSON.stringify(o);
     }
