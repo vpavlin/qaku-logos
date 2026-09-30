@@ -6,10 +6,10 @@ import Logos.Theme
 import Logos.Controls
 
 // QAKU pure-QML view - a multi-session Q&A app with a sidebar. It NEVER folds or
-// merges: all logic is in qaku_core. It polls the core's snapshot() action on a
-// Timer (events are not reliably delivered to QML across Basecamp versions) and
-// renders the returned JSON. Mutations call the core and re-render from the
-// call's own fresh return.
+// merges: all logic is in qaku_core. It renders the core's snapshot() JSON, kept
+// current by the core's stateChanged push plus a slow safety poll. EVERY module call
+// is asynchronous (see call() below - house rule: no blocking calls in QML); mutations
+// re-render from their own result (deferred) and then request a fresh snapshot.
 //
 // Layout mirrors the original qaku web app: a LEFT SIDEBAR (app header, a
 // "+ New Q&A" button, a Join-by-secret affordance, a scrollable list of your
@@ -47,9 +47,55 @@ Item {
     // Off-screen helper for the Copy button (base QML has no Clipboard type).
     TextEdit { id: clip; visible: false }
 
-    function callCore(m, a) {
-        if (typeof logos === "undefined" || !logos.callModule) return "";
-        return String(logos.callModule("qaku_core", m, a || []));
+    // ---- the ONE way this view talks to a module: ALWAYS async (house rule: no blocking
+    // calls in QML, ever). A synchronous logos.callModule on the QML thread freezes the whole UI
+    // for up to the 20 s IPC timeout whenever qaku_core is busy.
+    //   - Newer Basecamp bridges expose callModuleAsync(module, method, args, cb, timeoutMs):
+    //     cb receives ONE string (what callModule would return, or {"error":...} incl. timeout).
+    //   - Older bridges (Basecamp 0.2.0) lack it: fall back to the sync callModule, but run it
+    //     DEFERRED via Qt.callLater (never inside the caller's signal handler) and deliver the
+    //     result through the same callback, so every caller is uniformly async.
+    // cb is always invoked exactly once, with a string.
+    readonly property int callTimeoutMs: 20000
+    function hasAsyncBridge() {
+        return typeof logos !== "undefined" && logos !== null && typeof logos.callModuleAsync === "function";
+    }
+    function _deliver(cb, raw) {
+        if (!cb) return;
+        try { cb(raw === undefined || raw === null ? "" : String(raw)); }
+        catch (e) { console.warn("qaku view: callback error: " + e); }
+    }
+    function callModuleVia(module, method, args, cb) {
+        var a = args || [];
+        if (typeof logos === "undefined" || logos === null) {
+            Qt.callLater(function () { root._deliver(cb, '{"error":"no logos bridge"}'); });
+            return;
+        }
+        if (root.hasAsyncBridge()) {
+            try {
+                logos.callModuleAsync(module, method, a, function (res) { root._deliver(cb, res); }, root.callTimeoutMs);
+            } catch (e) {
+                var msg = JSON.stringify({ error: "callModuleAsync threw: " + e });
+                Qt.callLater(function () { root._deliver(cb, msg); });
+            }
+            return;
+        }
+        // Fallback (old bridge): the only remaining synchronous callModule, deferred out of the
+        // caller's handler so a delegate can never be destroyed mid-handler by the result.
+        Qt.callLater(function () {
+            var raw;
+            try { raw = (typeof logos.callModule === "function") ? logos.callModule(module, method, a) : '{"error":"no callModule"}'; }
+            catch (e) { raw = JSON.stringify({ error: "callModule threw: " + e }); }
+            root._deliver(cb, raw);
+        });
+    }
+    function call(method, args, cb) { root.callModuleVia("qaku_core", method, args, cb); }
+    // Human-readable error from a failed call's raw payload (for the toast), or "".
+    function errorOf(raw) {
+        var s = String(raw || "").trim();
+        for (var i = 0; i < 2 && s.charAt(0) === '"'; i++) { try { s = String(JSON.parse(s)).trim(); } catch (e) { break; } }
+        if (s.charAt(0) !== "{") return "";
+        try { var o = JSON.parse(s); return (o && o.error !== undefined) ? String(o.error) : ""; } catch (e2) { return ""; }
     }
     function asState(raw) {
         var s = String(raw || "").trim();
@@ -71,7 +117,27 @@ Item {
             && (eventCountOf(root.st) > 0 || sessionCountOf(root.st) > 0)) return;
         root.st = o; root.stateJson = JSON.stringify(o);
     }
-    function refresh() { apply(asState(callCore("snapshot", []))); }
+    // Snapshot fetch: async, never overlapping. A request while one is in flight is coalesced
+    // into ONE follow-up fetch after it returns. A watchdog frees the guard if a bridge ever
+    // fails to call back (longer than the IPC timeout), so the poll can never wedge.
+    property bool _snapInFlight: false
+    property bool _snapAgain: false
+    property double _snapStartedAt: 0
+    function refresh() {
+        if (root._snapInFlight && (Date.now() - root._snapStartedAt) < root.callTimeoutMs + 15000) {
+            root._snapAgain = true;
+            return;
+        }
+        root._snapInFlight = true; root._snapAgain = false; root._snapStartedAt = Date.now();
+        root.call("snapshot", [], function (raw) {
+            root._snapInFlight = false;
+            // asState() returns null for a failed call / error / timeout -> nothing applied, so a
+            // failure never blanks the view; apply() additionally refuses an empty state from a
+            // core that isn't ready yet.
+            root._pushState(root.asState(raw));
+            if (root._snapAgain) { root._snapAgain = false; Qt.callLater(root.refresh); }
+        });
+    }
 
     // ---- share QR (qaku_core.shareQr() -> matrix; drawn on a Canvas) ----
     // The host `qr` core is unreachable from pure QML, so the encoder is vendored
@@ -80,46 +146,73 @@ Item {
     property var qrData: null
     property string lastQrSecret: ""
     function buildQr() {
-        if (!root.secret) { root.qrData = null; return; }
-        try {
-            var res = callCore("shareQr", []);
-            for (var k = 0; k < 2 && typeof res === "string"; k++) res = JSON.parse(res);
-            if (res && res.ok && res.n && res.cells && res.cells.length >= res.n * res.n) {
-                root.qrData = { n: res.n, cells: res.cells };
-                root.lastQrSecret = root.secret;
-                try { qrCanvas.requestPaint(); } catch (e2) {}
-                return;
-            }
-        } catch (e) {}
-        root.qrData = null;
+        if (!root.secret) { root.qrData = null; root.lastQrSecret = ""; return; }
+        var want = root.secret;
+        root.call("shareQr", [], function (raw) {
+            if (root.secret !== want) return;       // session switched meanwhile; a newer build runs
+            try {
+                var res = raw;
+                for (var k = 0; k < 2 && typeof res === "string"; k++) res = JSON.parse(res);
+                if (res && res.ok && res.n && res.cells && res.cells.length >= res.n * res.n) {
+                    root.qrData = { n: res.n, cells: res.cells };
+                    root.lastQrSecret = want;
+                    try { qrCanvas.requestPaint(); } catch (e2) {}
+                    return;
+                }
+            } catch (e) {}
+            root.qrData = null;
+        });
     }
     // Rebuild the QR whenever the current session's secret changes — but DEFER it
-    // via Qt.callLater. secret first changes during Component.onCompleted (the first
-    // snapshot), and a synchronous callCore("shareQr") nested inside load wedges the
-    // QML render ("view does not load"). callLater runs it after the view is rendered.
+    // via Qt.callLater (shareQr itself is async via call(); callLater keeps it out of the
+    // load / apply path entirely).
     onSecretChanged: if (root.secret !== root.lastQrSecret) Qt.callLater(root.buildQr)
-    function mutate(m, a) {
-        // NEVER apply the result synchronously here. This runs inside a delegate's onClicked
-        // (add/edit/vote/answer), and apply() reassigns root.st, which destroys that very
-        // delegate while its handler is still on the stack -> "Object destroyed while one of
-        // its QML signal handlers is in progress" -> Aborted (the click-crash). Defer via the
-        // same _pendingState/callLater path the pushed stateChanged uses, so the model rebuilds
-        // safely on the next event-loop tick. (The mutation also makes qaku_core emit
-        // stateChanged, so the view still converges even if this result is dropped.)
-        var res = asState(callCore(m, a));
-        if (res) { root._pushState(res); return true; }
-        return false;
+    // ---- mutations: async, de-duplicated, result applied DEFERRED ----
+    // `inflight` maps method -> count of calls in flight (reassigned so bindings like a button's
+    // `enabled: !root.isBusy("addQuestion")` re-evaluate); `_inflightKeys` drops an identical
+    // call (same method + args) while one is still running - a double-click can't double-submit.
+    property var inflight: ({})
+    property var _inflightKeys: ({})
+    function isBusy(m) { return (root.inflight[m] || 0) > 0; }
+    function _mark(m, key, delta) {
+        var f = Object.assign({}, root.inflight);
+        f[m] = Math.max(0, (f[m] || 0) + delta);
+        if (f[m] === 0) delete f[m];
+        root.inflight = f;
+        var k = Object.assign({}, root._inflightKeys);
+        if (delta > 0) k[key] = true; else delete k[key];
+        root._inflightKeys = k;
+    }
+    // mutate(m, a, done): done(ok, errText) is called once. NEVER apply the result synchronously:
+    // the caller is usually a delegate's onClicked, and reassigning root.st rebuilds the model and
+    // destroys that delegate while its handler is on the stack ("Object destroyed while one of its
+    // QML signal handlers is in progress" -> Aborted). The result goes through _pushState
+    // (Qt.callLater), and a coalesced snapshot is requested after every mutation. Callbacks must
+    // not touch delegate-scoped items (they may be gone by then) - only root-level state.
+    // Returns false if an identical call was already in flight (dropped).
+    function mutate(m, a, done) {
+        var args = a || [];
+        var key = m + "\u0001" + JSON.stringify(args);
+        if (root._inflightKeys[key]) return false;
+        root._mark(m, key, +1);
+        root.call(m, args, function (raw) {
+            root._mark(m, key, -1);
+            var res = root.asState(raw);
+            if (res) root._pushState(res);
+            root.refresh();
+            if (done) {
+                try { done(!!res, res ? "" : root.errorOf(raw)); }
+                catch (e) { console.warn("qaku view: mutate done error: " + e); }
+            }
+        });
+        return true;
     }
 
-    // The view is kept current by the async stateChanged push (see onModuleEventReceived below),
-    // so we do NOT poll snapshot() on a fast synchronous timer. That 2.5s blocking callModule on
-    // the QML event loop is what froze the UI when qaku_core was busy (large session / heavy
-    // receive), and a click during the freeze piled a second blocking call on and took the host
-    // down. Keep only a slow safety poll for a rarely-dropped push, and apply it DEFERRED (never
-    // synchronously) so it can neither crash nor stall the loop.
+    // Baseline: a slow safety poll (async, in-flight-guarded, coalesced) in case a stateChanged
+    // push is dropped. The push (onModuleEventReceived below) is what keeps the view current.
     Timer {
         interval: 6000; running: true; repeat: true
-        onTriggered: root._pushState(root.asState(root.callCore("snapshot", [])))
+        onTriggered: root.refresh()
     }
     Component.onCompleted: {
         if (typeof logos !== "undefined" && logos.onModuleEvent) logos.onModuleEvent("qaku_core", "stateChanged");
@@ -150,7 +243,10 @@ Item {
             // handlers is in progress" -> Aborted. A burst of received messages (each a stateChanged)
             // makes it reliable. Qt.callLater coalesces the burst into a single apply of the latest
             // snapshot on the next tick (same pattern as buildQr; see onSecretChanged above).
-            if (module === "qaku_core") root._pushState(root.asState(data));
+            if (module !== "qaku_core") return;
+            var o = root.asState(data);
+            if (o) root._pushState(o);
+            else root.refresh();            // payload-less / unparsable push: fetch (coalesced, async)
         }
     }
 
@@ -239,14 +335,19 @@ Item {
     property string toastText: ""
     Timer { id: toastTimer; interval: 3200; onTriggered: root.toastText = "" }
     function toast(t) { root.toastText = t; toastTimer.restart(); }
-    function act(m, a, err) { if (!root.mutate(m, a)) root.toast(err || "Action failed - check qaku_core"); }
+    function act(m, a, err, onOk) {
+        root.mutate(m, a, function (ok, detail) {
+            if (ok) { if (onOk) onOk(); }
+            else root.toast((err || "Action failed - check qaku_core") + (detail ? (" (" + detail + ")") : ""));
+        });
+    }
     // ---- delete a Q&A (local removal via qaku_core.deleteSession), gated by a confirm step ----
     property string confirmDeleteId: ""
     property string confirmDeleteTitle: ""
     function askDelete(id, title) { root.confirmDeleteId = id || ""; root.confirmDeleteTitle = title || "Untitled Q&A"; }
     function doDelete() {
         var id = root.confirmDeleteId; root.confirmDeleteId = "";
-        if (id.length > 0 && root.mutate("deleteSession", [id])) root.toast("Q&A deleted");
+        if (id.length > 0) root.act("deleteSession", [id], "Could not delete Q&A", function () { root.toast("Q&A deleted"); });
     }
 
     Rectangle { anchors.fill: parent; color: root.qkBg }
@@ -330,7 +431,7 @@ Item {
                         Layout.fillWidth: true
                         implicitHeight: 38
                         text: "Create"
-                        enabled: newTitle.text.length > 0
+                        enabled: newTitle.text.length > 0 && !root.isBusy("createSession")
                         onClicked: {
                             root.act("createSession", [newTitle.text, newDesc.text], "Could not create session");
                             newTitle.text = ""; newDesc.text = ""; root.creating = false;
@@ -361,12 +462,11 @@ Item {
                         LogosButton {
                             Layout.fillWidth: true
                             implicitHeight: 38
-                            text: "Join"
-                            enabled: joinSecret.text.length >= 64
-                            onClicked: {
-                                if (root.mutate("joinSession", [joinSecret.text])) { joinSecret.text = ""; root.joining = false; }
-                                else root.toast("Could not join - secret must be 64 hex characters");
-                            }
+                            text: root.isBusy("joinSession") ? "Joining..." : "Join"
+                            enabled: joinSecret.text.length >= 64 && !root.isBusy("joinSession")
+                            onClicked: root.act("joinSession", [joinSecret.text],
+                                                "Could not join - secret must be 64 hex characters",
+                                                function () { joinSecret.text = ""; root.joining = false; })
                         }
                     }
                 }
@@ -513,7 +613,7 @@ Item {
                         LogosButton {
                             text: "Save"
                             implicitWidth: 64; implicitHeight: 34
-                            enabled: nameField.text !== (root.st.myName || "")
+                            enabled: nameField.text !== (root.st.myName || "") && !root.isBusy("setName")
                             onClicked: root.act("setName", [nameField.text], "Could not set name")
                         }
                     }
@@ -953,8 +1053,14 @@ Item {
                     LogosButton {
                         text: "Ask"
                         implicitWidth: 92; implicitHeight: 40
-                        enabled: root.sessionOpen && qField.text.length > 0
-                        onClicked: { root.act("addQuestion", [qField.text], "Could not add question"); qField.text = ""; }
+                        enabled: root.sessionOpen && qField.text.length > 0 && !root.isBusy("addQuestion")
+                        // Clear the field only once the core accepted it (a failure keeps the text),
+                        // and only if the user hasn't started typing something else meanwhile.
+                        onClicked: {
+                            var asked = qField.text;
+                            root.act("addQuestion", [asked], "Could not add question",
+                                     function () { if (qField.text === asked) qField.text = ""; });
+                        }
                     }
                 }
 
