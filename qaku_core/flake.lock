@@ -107,33 +107,88 @@
         "nix-bundle-lgx": "nix-bundle-lgx"
       },
       "locked": {
-        "lastModified": 1787679414,
-        "narHash": "sha256-ZmFgq8iPM8fgPTsSUBq6BE9lYGUWwM5YRLJoeJP/hYs=",
-        "path": "/home/vpavlin/kym-hub/sds-build/dm-channels",
-        "type": "path"
+        "lastModified": 1790842688,
+        "narHash": "sha256-k3XLOnjZIoNySMJV/VSt/OGLitpkhCv2mVE2LKqjaaw=",
+        "owner": "vpavlin",
+        "repo": "logos-delivery-module",
+        "rev": "7d93aeb9382ffdf2025e3d7835427420fc23cbb2",
+        "type": "github"
       },
       "original": {
-        "path": "/home/vpavlin/kym-hub/sds-build/dm-channels",
-        "type": "path"
+        "owner": "vpavlin",
+        "ref": "loam-0.1.4",
+        "repo": "logos-delivery-module",
+        "type": "github"
+      }
+    },
+    "keycard": {
+      "inputs": {
+        "keycard-qt-src": "keycard-qt-src",
+        "logos-module-builder": [
+          "loam_core",
+          "logos-module-builder"
+        ],
+        "nixpkgs": [
+          "loam_core",
+          "keycard",
+          "logos-module-builder",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786454206,
+        "narHash": "sha256-BnnDNqXEFyzZQ8UnB7+jiACSlQ8V8aj8DeKKm5W3B60=",
+        "owner": "xAlisher",
+        "repo": "keycard-basecamp",
+        "rev": "7865e3fa189c31c81ca40bd434e745740e1114fe",
+        "type": "github"
+      },
+      "original": {
+        "owner": "xAlisher",
+        "repo": "keycard-basecamp",
+        "type": "github"
+      }
+    },
+    "keycard-qt-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1776197161,
+        "narHash": "sha256-dbp+Bt5Y+oiTOZzSDPS9Qf3l98hE8lGo123MWuaXIpE=",
+        "owner": "xAlisher",
+        "repo": "keycard-qt",
+        "rev": "5cd0b0d22659fd8564c749787fc86c1374b00223",
+        "type": "github"
+      },
+      "original": {
+        "owner": "xAlisher",
+        "repo": "keycard-qt",
+        "rev": "5cd0b0d22659fd8564c749787fc86c1374b00223",
+        "type": "github"
       }
     },
     "loam_core": {
       "inputs": {
         "ble_mesh": "ble_mesh",
         "delivery_module": "delivery_module",
+        "keycard": "keycard",
         "logos-module-builder": [
           "logos-module-builder"
         ]
       },
       "locked": {
-        "lastModified": 1787726365,
-        "narHash": "sha256-NNKq1PBf0unlhjteGueKJecZu5Qc73/Maawc6v8PIHs=",
-        "path": "/home/vpavlin/loam-basecamp/core",
-        "type": "path"
+        "dir": "core",
+        "lastModified": 1790847047,
+        "narHash": "sha256-g+d+ObwvzBSZAUX2Eek1pPQcEdT5rhaVrsO8laTrqEM=",
+        "owner": "vpavlin",
+        "repo": "loam-basecamp",
+        "rev": "ef938f41edab518085e3463ad24a707530de8b74",
+        "type": "github"
       },
       "original": {
-        "path": "/home/vpavlin/loam-basecamp/core",
-        "type": "path"
+        "dir": "core",
+        "owner": "vpavlin",
+        "repo": "loam-basecamp",
+        "type": "github"
       }
     },
     "logos-capability-module": {
