@@ -460,13 +460,13 @@ Item {
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: Theme.spacing.tiny
-                        LogosText {
+                        LogosText { textFormat: Text.PlainText;
                             text: "QAKU"
                             color: root.qkGold
                             font.pixelSize: Theme.typography.panelTitleText
                             font.weight: Theme.typography.weightBold
                         }
-                        LogosText {
+                        LogosText { textFormat: Text.PlainText;
                             text: "Local-first Q&A on Logos"
                             color: Theme.palette.textSecondary
                             font.pixelSize: Theme.typography.secondaryText
@@ -546,7 +546,7 @@ Item {
                 }
 
                 // ---- Your Q&As ----
-                LogosText {
+                LogosText { textFormat: Text.PlainText;
                     text: "YOUR Q&AS"
                     color: Theme.palette.textTertiary
                     font.pixelSize: Theme.typography.badgeText
@@ -561,7 +561,7 @@ Item {
                     spacing: Theme.spacing.tiny
                     model: root.sessions
 
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         anchors.centerIn: parent
                         width: parent.width - 2 * Theme.spacing.small
                         visible: sessionList.count === 0
@@ -598,7 +598,7 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: Theme.spacing.small
-                                LogosText {
+                                LogosText { textFormat: Text.PlainText;
                                     Layout.fillWidth: true
                                     text: modelData.title || "Untitled Q&A"
                                     elide: Text.ElideRight
@@ -612,7 +612,7 @@ Item {
                                     color: Theme.palette.backgroundSecondary
                                     implicitWidth: closedLbl.implicitWidth + Theme.spacing.small
                                     implicitHeight: closedLbl.implicitHeight + 4
-                                    LogosText { id: closedLbl; anchors.centerIn: parent; text: "closed"; color: Theme.palette.textTertiary; font.pixelSize: Theme.typography.badgeText }
+                                    LogosText { textFormat: Text.PlainText; id: closedLbl; anchors.centerIn: parent; text: "closed"; color: Theme.palette.textTertiary; font.pixelSize: Theme.typography.badgeText }
                                 }
                                 // Delete this Q&A. Its own MouseArea sits above the row's switch handler.
                                 Rectangle {
@@ -621,7 +621,7 @@ Item {
                                     color: delMa.containsMouse ? Theme.palette.overlayOrange : "transparent"
                                     border.color: delMa.containsMouse ? Theme.palette.error : Theme.palette.borderHairline
                                     border.width: 1
-                                    LogosText {
+                                    LogosText { textFormat: Text.PlainText;
                                         anchors.centerIn: parent; text: "×"
                                         color: delMa.containsMouse ? Theme.palette.error : Theme.palette.textTertiary
                                         font.pixelSize: Theme.typography.primaryText
@@ -636,20 +636,20 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: Theme.spacing.small
-                                LogosText {
+                                LogosText { textFormat: Text.PlainText;
                                     text: modelData.role
                                     color: root.roleColor(modelData.role)
                                     font.pixelSize: Theme.typography.badgeText
                                     font.weight: Theme.typography.weightMedium
                                 }
-                                LogosText { text: "-"; color: Theme.palette.textTertiary; font.pixelSize: Theme.typography.badgeText }
-                                LogosText {
+                                LogosText { textFormat: Text.PlainText; text: "-"; color: Theme.palette.textTertiary; font.pixelSize: Theme.typography.badgeText }
+                                LogosText { textFormat: Text.PlainText;
                                     text: (modelData.questions || 0) + " q"
                                     color: Theme.palette.textTertiary
                                     font.pixelSize: Theme.typography.badgeText
                                 }
-                                LogosText { text: "-"; color: Theme.palette.textTertiary; font.pixelSize: Theme.typography.badgeText }
-                                LogosText {
+                                LogosText { textFormat: Text.PlainText; text: "-"; color: Theme.palette.textTertiary; font.pixelSize: Theme.typography.badgeText }
+                                LogosText { textFormat: Text.PlainText;
                                     Layout.fillWidth: true
                                     text: "fp " + (modelData.fingerprint || "")
                                     elide: Text.ElideRight
@@ -668,7 +668,7 @@ Item {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: Theme.spacing.tiny
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         text: "DISPLAY NAME"
                         color: Theme.palette.textTertiary
                         font.pixelSize: Theme.typography.badgeText
@@ -692,7 +692,7 @@ Item {
                         }
                     }
                     Item { Layout.preferredHeight: Theme.spacing.tiny }
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         text: "YOUR IDENTITY"
                         color: Theme.palette.textTertiary
                         font.pixelSize: Theme.typography.badgeText
@@ -701,7 +701,7 @@ Item {
                     // The signing address (from sign.key) — read-only. NOT editable: this is
                     // your cryptographic identity, and it's what an owner adds to make you an
                     // admin. Copy it; don't type over it.
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         Layout.fillWidth: true
                         text: root.st.address || root.st.deviceId || ""
                         color: root.qkTeal
@@ -712,7 +712,7 @@ Item {
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: Theme.spacing.small
-                        LogosText {
+                        LogosText { textFormat: Text.PlainText;
                             Layout.fillWidth: true
                             text: "Share this address to be added as an admin"
                             color: root.qkMuted
@@ -731,7 +731,7 @@ Item {
                     // list automatically, and honors Hide — hiding a question here removes
                     // it from the stream too.
                     Item { Layout.preferredHeight: Theme.spacing.tiny }
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         text: "STREAM OVERLAY"
                         color: Theme.palette.textTertiary
                         font.pixelSize: Theme.typography.badgeText
@@ -750,7 +750,7 @@ Item {
                             color: root.overlayOn ? root.qkGold : root.qkSurface2
                             border.width: 1
                             border.color: root.overlayOn ? root.qkGold : root.qkBorder
-                            LogosText {
+                            LogosText { textFormat: Text.PlainText;
                                 anchors.centerIn: parent
                                 text: root.overlayOn ? "ON" : "OFF"
                                 color: root.overlayOn ? root.qkBg : root.qkMuted
@@ -786,7 +786,7 @@ Item {
                         Layout.fillWidth: true
                         spacing: Theme.spacing.small
                         visible: root.overlayOn && !root.overlayErr
-                        LogosText {
+                        LogosText { textFormat: Text.PlainText;
                             Layout.fillWidth: true
                             text: (root.st.overlay && root.st.overlay.url) || ""
                             color: root.qkTeal
@@ -800,7 +800,7 @@ Item {
                             onClicked: { clip.text = (root.st.overlay && root.st.overlay.url) || ""; clip.selectAll(); clip.copy(); root.toast("Overlay URL copied - paste into an OBS Browser Source"); }
                         }
                     }
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         Layout.fillWidth: true
                         visible: root.overlayErr !== ""
                         text: "Overlay: " + root.overlayErr
@@ -812,7 +812,7 @@ Item {
                         Layout.fillWidth: true
                         spacing: Theme.spacing.small
                         visible: root.overlayOn && !root.overlayErr
-                        LogosText {
+                        LogosText { textFormat: Text.PlainText;
                             Layout.fillWidth: true
                             text: root.onStreamCount === 0
                                   ? "Nothing on stream - overlay is blank"
@@ -828,7 +828,7 @@ Item {
                             onClicked: root.act("clearOnStream", [], "Could not clear the stream selection")
                         }
                     }
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         Layout.fillWidth: true
                         visible: root.overlayOn && !root.overlayErr
                         text: "Pick questions with + STREAM. Browser Source in OBS, 420x1080."
@@ -839,7 +839,7 @@ Item {
                 }
 
                 // ---- status line ----
-                LogosText {
+                LogosText { textFormat: Text.PlainText;
                     Layout.fillWidth: true
                     text: root.st.status || "Starting..."
                     color: Theme.palette.textSecondary
@@ -853,14 +853,14 @@ Item {
                     Layout.topMargin: Theme.spacing.small
                     spacing: Theme.spacing.tiny
                     visible: !!root.st.contentTopic
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         text: (root.showDiag ? "▾  " : "▸  ") + "SYNC / TRANSPORT"
                         color: Theme.palette.textTertiary
                         font.pixelSize: Theme.typography.badgeText
                         font.weight: Theme.typography.weightMedium
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.showDiag = !root.showDiag }
                     }
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         visible: root.showDiag
                         Layout.fillWidth: true
                         text: "topic " + (root.st.contentTopic || "-")
@@ -869,7 +869,7 @@ Item {
                         font.family: "monospace"
                         wrapMode: Text.WrapAnywhere
                     }
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         visible: root.showDiag
                         Layout.fillWidth: true
                         text: "shard " + (root.st.shard !== undefined ? root.st.shard : "-")
@@ -878,7 +878,7 @@ Item {
                         font.pixelSize: Theme.typography.badgeText
                         font.family: "monospace"
                     }
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         visible: root.showDiag
                         Layout.fillWidth: true
                         text: {
@@ -909,14 +909,14 @@ Item {
                 width: Math.min(parent.width - 2 * Theme.spacing.large, 420)
                 visible: !root.hasSession && !root.awaitingState
                 spacing: Theme.spacing.small
-                LogosText {
+                LogosText { textFormat: Text.PlainText;
                     Layout.alignment: Qt.AlignHCenter
                     text: "Welcome to QAKU"
                     color: Theme.palette.text
                     font.pixelSize: Theme.typography.panelTitleText
                     font.weight: Theme.typography.weightBold
                 }
-                LogosText {
+                LogosText { textFormat: Text.PlainText;
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignHCenter
                     text: "Create a new Q&A or join one with a shared secret. Every Q&A syncs peer-to-peer in the background."
@@ -937,14 +937,14 @@ Item {
                     running: root.awaitingState && !root.awaitTimedOut
                     implicitWidth: 48; implicitHeight: 48
                 }
-                LogosText {
+                LogosText { textFormat: Text.PlainText;
                     Layout.alignment: Qt.AlignHCenter
                     text: root.awaitTimedOut ? "Still waiting for a peer…" : "Fetching this Q&A…"
                     color: Theme.palette.text
                     font.pixelSize: Theme.typography.panelTitleText
                     font.weight: Theme.typography.weightBold
                 }
-                LogosText {
+                LogosText { textFormat: Text.PlainText;
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignHCenter
                     text: root.awaitTimedOut
@@ -954,7 +954,7 @@ Item {
                     font.pixelSize: Theme.typography.primaryText
                     wrapMode: Text.WordWrap
                 }
-                LogosText {
+                LogosText { textFormat: Text.PlainText;
                     visible: root.fingerprint.length > 0
                     Layout.alignment: Qt.AlignHCenter
                     text: "fp " + root.fingerprint
@@ -976,13 +976,13 @@ Item {
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: Theme.spacing.tiny
-                        LogosText {
+                        LogosText { textFormat: Text.PlainText;
                             text: root.hasSession ? (root.st.session.title || "Untitled Q&A") : "QAKU"
                             color: Theme.palette.text
                             font.pixelSize: Theme.typography.panelTitleText
                             font.weight: Theme.typography.weightBold
                         }
-                        LogosText {
+                        LogosText { textFormat: Text.PlainText;
                             text: (root.sessionOpen ? "Open" : "Closed") + "   -   " + root.questions.length
                                 + (root.questions.length === 1 ? " question" : " questions")
                                 + (root.fingerprint ? "   -   fp " + root.fingerprint : "")
@@ -1020,13 +1020,13 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.margins: Theme.spacing.medium
                         spacing: Theme.spacing.small
-                        LogosText {
+                        LogosText { textFormat: Text.PlainText;
                             text: "Share this Q&A"
                             color: Theme.palette.text
                             font.pixelSize: Theme.typography.subtitleText
                             font.weight: Theme.typography.weightMedium
                         }
-                        LogosText {
+                        LogosText { textFormat: Text.PlainText;
                             Layout.fillWidth: true
                             text: "Scan the QR with the QAKU phone app, or share the link/secret, to let a phone or peer join and sync the same Q&A. The secret is the password - it encrypts every message end-to-end. Keep it private."
                             color: Theme.palette.textSecondary
@@ -1068,7 +1068,7 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.alignment: Qt.AlignTop
                                 spacing: Theme.spacing.small
-                                LogosText {
+                                LogosText { textFormat: Text.PlainText;
                                     text: "Share link"
                                     color: Theme.palette.textTertiary
                                     font.pixelSize: Theme.typography.badgeText
@@ -1088,7 +1088,7 @@ Item {
                                         onClicked: { clip.text = root.shareUri; clip.selectAll(); clip.copy(); root.toast("Share link copied - open or scan it on a phone to join"); }
                                     }
                                 }
-                                LogosText {
+                                LogosText { textFormat: Text.PlainText;
                                     text: "Secret (password)"
                                     color: Theme.palette.textTertiary
                                     font.pixelSize: Theme.typography.badgeText
@@ -1124,7 +1124,7 @@ Item {
                             radius: 16; implicitHeight: 32; implicitWidth: tabChipTxt.implicitWidth + 28
                             color: modelData.k === root.paneView ? root.qkGold : root.qkSurface
                             border.color: root.qkBorder; border.width: 1
-                            LogosText { id: tabChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.primaryText
+                            LogosText { textFormat: Text.PlainText; id: tabChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.primaryText
                                 font.weight: Theme.typography.weightMedium
                                 color: modelData.k === root.paneView ? root.qkBg : root.qkMuted }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.paneView = modelData.k }
@@ -1166,14 +1166,14 @@ Item {
                     spacing: Theme.spacing.medium
                     RowLayout {
                         spacing: Theme.spacing.tiny
-                        LogosText { text: "Sort"; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                        LogosText { textFormat: Text.PlainText; text: "Sort"; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
                         Repeater {
                             model: [{ k: "top", l: "Top" }, { k: "new", l: "New" }, { k: "old", l: "Old" }]
                             delegate: Rectangle {
                                 radius: 14; implicitHeight: 28; implicitWidth: sortChipTxt.implicitWidth + 22
                                 color: modelData.k === root.sortBy ? root.qkGold : root.qkSurface
                                 border.color: root.qkBorder; border.width: 1
-                                LogosText { id: sortChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.secondaryText; color: modelData.k === root.sortBy ? root.qkBg : root.qkMuted }
+                                LogosText { textFormat: Text.PlainText; id: sortChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.secondaryText; color: modelData.k === root.sortBy ? root.qkBg : root.qkMuted }
                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.sortBy = modelData.k }
                             }
                         }
@@ -1181,14 +1181,14 @@ Item {
                     Item { Layout.fillWidth: true }
                     RowLayout {
                         spacing: Theme.spacing.tiny
-                        LogosText { text: "Show"; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                        LogosText { textFormat: Text.PlainText; text: "Show"; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
                         Repeater {
                             model: [{ k: "all", l: "All" }, { k: "unanswered", l: "Unanswered" }, { k: "answered", l: "Answered" }]
                             delegate: Rectangle {
                                 radius: 14; implicitHeight: 28; implicitWidth: filterChipTxt.implicitWidth + 22
                                 color: modelData.k === root.filterBy ? root.qkGold : root.qkSurface
                                 border.color: root.qkBorder; border.width: 1
-                                LogosText { id: filterChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.secondaryText; color: modelData.k === root.filterBy ? root.qkBg : root.qkMuted }
+                                LogosText { textFormat: Text.PlainText; id: filterChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.secondaryText; color: modelData.k === root.filterBy ? root.qkBg : root.qkMuted }
                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.filterBy = modelData.k }
                             }
                         }
@@ -1205,7 +1205,7 @@ Item {
                     spacing: Theme.spacing.small
                     model: root.visibleQuestions
 
-                    LogosText {
+                    LogosText { textFormat: Text.PlainText;
                         anchors.centerIn: parent
                         visible: qList.count === 0
                         text: root.questions.length === 0 ? "No questions yet - be the first to ask" : "No questions match this filter"
@@ -1222,7 +1222,7 @@ Item {
                         Rectangle { width: parent.width; height: 1; color: root.qkBorder }
                         Item {
                             width: parent.width; height: 34
-                            LogosText { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                            LogosText { textFormat: Text.PlainText; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
                                 text: (root.hiddenOpen ? "▾" : "▸") + "  Hidden (" + root.hiddenQuestions.length + ")"
                                 color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightMedium }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.hiddenOpen = !root.hiddenOpen }
@@ -1237,12 +1237,12 @@ Item {
                                     id: hcol
                                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: Theme.spacing.small
                                     spacing: 3
-                                    LogosText { width: parent.width; text: modelData.content || ""; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; wrapMode: Text.WordWrap }
+                                    LogosText { textFormat: Text.PlainText; width: parent.width; text: modelData.content || ""; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; wrapMode: Text.WordWrap }
                                     Row {
                                         width: parent.width; spacing: Theme.spacing.small
-                                        LogosText { text: root.nameOf(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                                        LogosText { textFormat: Text.PlainText; text: root.nameOf(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
                                         Item { width: parent.width - 160; height: 1 }
-                                        LogosText { visible: root.isAdmin; text: "Unhide"; color: root.qkTeal; font.pixelSize: Theme.typography.secondaryText
+                                        LogosText { textFormat: Text.PlainText; visible: root.isAdmin; text: "Unhide"; color: root.qkTeal; font.pixelSize: Theme.typography.secondaryText
                                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.act("moderate", [modelData.id, "false"], "Could not unhide") }
                                         }
                                     }
@@ -1280,8 +1280,8 @@ Item {
                                     border.color: root.qkBorder; border.width: 1
                                     ColumnLayout {
                                         anchors.centerIn: parent; spacing: 0
-                                        LogosText { Layout.alignment: Qt.AlignHCenter; text: "▲"; color: root.qkGold; font.pixelSize: 11 }
-                                        LogosText { Layout.alignment: Qt.AlignHCenter; text: "" + (modelData.upvotes || 0); color: root.qkText; font.pixelSize: 15; font.weight: Theme.typography.weightMedium }
+                                        LogosText { textFormat: Text.PlainText; Layout.alignment: Qt.AlignHCenter; text: "▲"; color: root.qkGold; font.pixelSize: 11 }
+                                        LogosText { textFormat: Text.PlainText; Layout.alignment: Qt.AlignHCenter; text: "" + (modelData.upvotes || 0); color: root.qkText; font.pixelSize: 15; font.weight: Theme.typography.weightMedium }
                                     }
                                     MouseArea { id: upMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                         onClicked: root.act("upvoteQuestion", [modelData.id, "true"], "Could not upvote") }
@@ -1291,7 +1291,7 @@ Item {
                                     Layout.fillWidth: true
                                     Layout.alignment: Qt.AlignVCenter
                                     spacing: Theme.spacing.tiny
-                                    LogosText {
+                                    LogosText { textFormat: Text.PlainText;
                                         Layout.fillWidth: true
                                         text: (modelData.moderated ? "🚫  " : "") + (modelData.content || "")
                                         color: modelData.moderated ? root.qkMuted : root.qkText
@@ -1303,12 +1303,12 @@ Item {
                                         Rectangle {
                                             implicitWidth: 18; implicitHeight: 18; radius: 9
                                             color: Qt.hsla(root.hueFor(modelData.author) / 360, 0.45, 0.32, 1)
-                                            LogosText { anchors.centerIn: parent; text: (modelData.author && modelData.author.length > 2) ? modelData.author.charAt(2).toUpperCase() : "?"; color: root.qkText; font.pixelSize: 9; font.weight: Theme.typography.weightBold }
+                                            LogosText { textFormat: Text.PlainText; anchors.centerIn: parent; text: (modelData.author && modelData.author.length > 2) ? modelData.author.charAt(2).toUpperCase() : "?"; color: root.qkText; font.pixelSize: 9; font.weight: Theme.typography.weightBold }
                                         }
-                                        LogosText { text: root.nameOf(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
-                                        LogosText { text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; opacity: 0.85 }
+                                        LogosText { textFormat: Text.PlainText; text: root.nameOf(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                                        LogosText { textFormat: Text.PlainText; text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText; opacity: 0.85 }
                                         // Our own question not yet dispatched to the network (see qaku_core m_unpublished).
-                                        LogosText { visible: !!modelData.queued; text: "·  ⏳ queued"; color: root.qkGold; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightBold }
+                                        LogosText { textFormat: Text.PlainText; visible: !!modelData.queued; text: "·  ⏳ queued"; color: root.qkGold; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightBold }
                                         Item { Layout.preferredWidth: Theme.spacing.tiny; visible: root.overlayOn }
                                         // Stream overlay pick. Only shown while the overlay is running - it is
                                         // meaningless otherwise, and the row is already busy. A Rectangle +
@@ -1322,7 +1322,7 @@ Item {
                                             color: modelData.onStream ? root.qkGold : "transparent"
                                             border.width: 1
                                             border.color: modelData.onStream ? root.qkGold : root.qkBorder
-                                            LogosText {
+                                            LogosText { textFormat: Text.PlainText;
                                                 id: streamLbl
                                                 anchors.centerIn: parent
                                                 text: modelData.onStream ? "● ON STREAM" : "+ STREAM"
@@ -1358,8 +1358,8 @@ Item {
                                         border.color: root.qkBorder; border.width: 1
                                         ColumnLayout {
                                             anchors.centerIn: parent; spacing: 0
-                                            LogosText { Layout.alignment: Qt.AlignHCenter; text: "▲"; color: root.qkGold; font.pixelSize: 9 }
-                                            LogosText { Layout.alignment: Qt.AlignHCenter; text: "" + (modelData.upvotes || 0); color: root.qkText; font.pixelSize: 12; font.weight: Theme.typography.weightMedium }
+                                            LogosText { textFormat: Text.PlainText; Layout.alignment: Qt.AlignHCenter; text: "▲"; color: root.qkGold; font.pixelSize: 9 }
+                                            LogosText { textFormat: Text.PlainText; Layout.alignment: Qt.AlignHCenter; text: "" + (modelData.upvotes || 0); color: root.qkText; font.pixelSize: 12; font.weight: Theme.typography.weightMedium }
                                         }
                                         MouseArea { id: aUpMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                             onClicked: root.act("upvoteAnswer", [modelData.id, "true"], "Could not upvote") }
@@ -1368,7 +1368,7 @@ Item {
                                         Layout.fillWidth: true
                                         Layout.alignment: Qt.AlignVCenter
                                         spacing: Theme.spacing.tiny
-                                        LogosText {
+                                        LogosText { textFormat: Text.PlainText;
                                             readonly property bool acc: qCard.acceptedId === modelData.id   // one accepted answer per Q
                                             Layout.fillWidth: true
                                             text: (acc ? "✓  " : "") + (modelData.content || "")
@@ -1381,13 +1381,13 @@ Item {
                                             Rectangle {
                                                 implicitWidth: 16; implicitHeight: 16; radius: 8
                                                 color: Qt.hsla(root.hueFor(modelData.author) / 360, 0.45, 0.32, 1)
-                                                LogosText { anchors.centerIn: parent; text: (modelData.author && modelData.author.length > 2) ? modelData.author.charAt(2).toUpperCase() : "?"; color: root.qkText; font.pixelSize: 8; font.weight: Theme.typography.weightBold }
+                                                LogosText { textFormat: Text.PlainText; anchors.centerIn: parent; text: (modelData.author && modelData.author.length > 2) ? modelData.author.charAt(2).toUpperCase() : "?"; color: root.qkText; font.pixelSize: 8; font.weight: Theme.typography.weightBold }
                                             }
-                                            LogosText { text: root.nameOf(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText }
-                                            LogosText { visible: qCard.acceptedId === modelData.id; text: "·  accepted"; color: root.qkTeal; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
-                                            LogosText { text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; opacity: 0.85 }
+                                            LogosText { textFormat: Text.PlainText; text: root.nameOf(modelData.author); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText }
+                                            LogosText { textFormat: Text.PlainText; visible: qCard.acceptedId === modelData.id; text: "·  accepted"; color: root.qkTeal; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
+                                            LogosText { textFormat: Text.PlainText; text: "·  " + root.timeAgo(modelData.ts); color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; opacity: 0.85 }
                                             // owner/admin: accept / unaccept this answer
-                                            LogosText {
+                                            LogosText { textFormat: Text.PlainText;
                                                 visible: root.isAdmin
                                                 text: (qCard.acceptedId === modelData.id) ? "·  unaccept" : "·  accept ✓"
                                                 color: root.qkGold; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightBold
@@ -1405,12 +1405,12 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.leftMargin: 58 + Theme.spacing.medium
                                 spacing: Theme.spacing.large
-                                LogosText {
+                                LogosText { textFormat: Text.PlainText;
                                     text: qCard.answering ? "Cancel" : "Answer"
                                     color: root.qkTeal; font.pixelSize: Theme.typography.secondaryText
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: qCard.answering = !qCard.answering }
                                 }
-                                LogosText {
+                                LogosText { textFormat: Text.PlainText;
                                     text: modelData.moderated ? "Show" : "Hide"
                                     color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.act("moderate", [modelData.id, modelData.moderated ? "false" : "true"], "Could not moderate") }
@@ -1477,7 +1477,7 @@ Item {
                                 Item {
                                     Layout.fillWidth: true
                                     implicitHeight: npHead.implicitHeight
-                                    LogosText {
+                                    LogosText { textFormat: Text.PlainText;
                                         id: npHead
                                         text: (root.pollFormOpen ? "▾  " : "▸  ") + "New poll"
                                         color: root.qkGold
@@ -1492,7 +1492,7 @@ Item {
                                     Layout.fillWidth: true
                                     spacing: Theme.spacing.small
 
-                                    LogosText { text: "Title (optional)"; color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
+                                    LogosText { textFormat: Text.PlainText; text: "Title (optional)"; color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
                                     AppField {
                                         id: pollTitleField
                                         objectName: "pollTitleField"
@@ -1500,7 +1500,7 @@ Item {
                                         implicitHeight: 36
                                         placeholderText: "e.g. Feature priority vote"
                                     }
-                                    LogosText { text: "Question *"; color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
+                                    LogosText { textFormat: Text.PlainText; text: "Question *"; color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
                                     AppField {
                                         id: pollQuestionField
                                         objectName: "pollQuestionField"
@@ -1508,7 +1508,7 @@ Item {
                                         implicitHeight: 38
                                         placeholderText: "What do you want to ask?"
                                     }
-                                    LogosText { text: "Options * (at least 2)"; color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
+                                    LogosText { textFormat: Text.PlainText; text: "Options * (at least 2)"; color: root.qkMuted; font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
                                     Repeater {
                                         model: pollOpts
                                         delegate: RowLayout {
@@ -1517,7 +1517,7 @@ Item {
                                             required property string label
                                             Layout.fillWidth: true
                                             spacing: Theme.spacing.small
-                                            LogosText {
+                                            LogosText { textFormat: Text.PlainText;
                                                 Layout.preferredWidth: 70
                                                 text: "Option " + (optRow.index + 1)
                                                 color: root.qkMuted
@@ -1539,7 +1539,7 @@ Item {
                                                 color: rmOptMa.containsMouse && pollOpts.count > 2 ? Theme.palette.overlayOrange : "transparent"
                                                 border.color: rmOptMa.containsMouse && pollOpts.count > 2 ? Theme.palette.error : Theme.palette.borderHairline
                                                 border.width: 1
-                                                LogosText { anchors.centerIn: parent; text: "×"; color: Theme.palette.textTertiary; font.pixelSize: Theme.typography.primaryText }
+                                                LogosText { textFormat: Text.PlainText; anchors.centerIn: parent; text: "×"; color: Theme.palette.textTertiary; font.pixelSize: Theme.typography.primaryText }
                                                 MouseArea {
                                                     id: rmOptMa; anchors.fill: parent; hoverEnabled: true
                                                     enabled: pollOpts.count > 2
@@ -1549,7 +1549,7 @@ Item {
                                             }
                                         }
                                     }
-                                    LogosText {
+                                    LogosText { textFormat: Text.PlainText;
                                         text: "+ Add option"
                                         color: root.qkTeal
                                         font.pixelSize: Theme.typography.secondaryText
@@ -1566,21 +1566,21 @@ Item {
                                             radius: 14; implicitHeight: 28; implicitWidth: actChipTxt.implicitWidth + 22
                                             color: root.pollFormActive ? root.qkGold : root.qkSurface
                                             border.color: root.pollFormActive ? root.qkGold : root.qkBorder; border.width: 1
-                                            LogosText { id: actChipTxt; anchors.centerIn: parent
+                                            LogosText { textFormat: Text.PlainText; id: actChipTxt; anchors.centerIn: parent
                                                 text: (root.pollFormActive ? "✓ " : "") + "Active now"
                                                 font.pixelSize: Theme.typography.secondaryText
                                                 color: root.pollFormActive ? root.qkBg : root.qkMuted }
                                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.pollFormActive = !root.pollFormActive }
                                         }
                                         Item { Layout.preferredWidth: Theme.spacing.medium }
-                                        LogosText { text: "Results"; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
+                                        LogosText { textFormat: Text.PlainText; text: "Results"; color: root.qkMuted; font.pixelSize: Theme.typography.secondaryText }
                                         Repeater {
                                             model: [{ k: "always", l: "Always" }, { k: "afterVote", l: "After voting" }]
                                             delegate: Rectangle {
                                                 radius: 14; implicitHeight: 28; implicitWidth: resChipTxt.implicitWidth + 22
                                                 color: modelData.k === root.pollFormResults ? root.qkGold : root.qkSurface
                                                 border.color: root.qkBorder; border.width: 1
-                                                LogosText { id: resChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.secondaryText
+                                                LogosText { textFormat: Text.PlainText; id: resChipTxt; anchors.centerIn: parent; text: modelData.l; font.pixelSize: Theme.typography.secondaryText
                                                     color: modelData.k === root.pollFormResults ? root.qkBg : root.qkMuted }
                                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.pollFormResults = modelData.k }
                                             }
@@ -1592,7 +1592,7 @@ Item {
                                         Layout.fillWidth: true
                                         Layout.topMargin: Theme.spacing.tiny
                                         spacing: Theme.spacing.small
-                                        LogosText {
+                                        LogosText { textFormat: Text.PlainText;
                                             Layout.fillWidth: true
                                             text: root.pollFormProblem
                                             color: root.qkGold
@@ -1615,7 +1615,7 @@ Item {
                             }
                         }
 
-                        LogosText {
+                        LogosText { textFormat: Text.PlainText;
                             visible: root.polls.length === 0
                             Layout.fillWidth: true
                             Layout.topMargin: Theme.spacing.large
@@ -1655,7 +1655,7 @@ Item {
                                         ColumnLayout {
                                             Layout.fillWidth: true
                                             spacing: 2
-                                            LogosText {
+                                            LogosText { textFormat: Text.PlainText;
                                                 visible: !!pCard.poll.title
                                                 Layout.fillWidth: true
                                                 text: pCard.poll.title || ""
@@ -1664,7 +1664,7 @@ Item {
                                                 font.weight: Theme.typography.weightBold
                                                 elide: Text.ElideRight
                                             }
-                                            LogosText {
+                                            LogosText { textFormat: Text.PlainText;
                                                 Layout.fillWidth: true
                                                 text: pCard.poll.question || ""
                                                 color: root.qkText
@@ -1679,14 +1679,14 @@ Item {
                                             implicitWidth: stLbl.implicitWidth + 16; implicitHeight: 20
                                             color: pCard.poll.active ? "transparent" : root.qkSurface2
                                             border.color: pCard.poll.active ? root.qkTeal : root.qkBorder; border.width: 1
-                                            LogosText { id: stLbl; anchors.centerIn: parent
+                                            LogosText { textFormat: Text.PlainText; id: stLbl; anchors.centerIn: parent
                                                 text: pCard.poll.active ? "● ACTIVE" : "CLOSED"
                                                 color: pCard.poll.active ? root.qkTeal : root.qkMuted
                                                 font.pixelSize: Theme.typography.badgeText; font.weight: Theme.typography.weightMedium }
                                         }
                                     }
 
-                                    LogosText {
+                                    LogosText { textFormat: Text.PlainText;
                                         text: pCard.total + (pCard.total === 1 ? " vote" : " votes")
                                               + (pCard.poll.results === "afterVote" ? "   ·   results after voting" : "")
                                               + (pCard.poll.ts ? "   ·   " + root.timeAgo(pCard.poll.ts) : "")
@@ -1734,7 +1734,7 @@ Item {
                                                     anchors.fill: parent
                                                     anchors.leftMargin: Theme.spacing.medium; anchors.rightMargin: Theme.spacing.medium
                                                     spacing: Theme.spacing.small
-                                                    LogosText {
+                                                    LogosText { textFormat: Text.PlainText;
                                                         Layout.fillWidth: true
                                                         text: oRow.opt.title + (oRow.mine ? "   ✓ your vote" : "")
                                                         color: oRow.mine ? root.qkTeal : root.qkText
@@ -1742,7 +1742,7 @@ Item {
                                                         font.weight: oRow.leads ? Theme.typography.weightBold : Theme.typography.weightRegular
                                                         elide: Text.ElideRight
                                                     }
-                                                    LogosText {
+                                                    LogosText { textFormat: Text.PlainText;
                                                         visible: pCard.showRes
                                                         text: oRow.n + "   " + Math.round(oRow.frac * 100) + "%"
                                                         color: oRow.leads ? root.qkGold : root.qkMuted
@@ -1754,14 +1754,14 @@ Item {
                                         }
                                     }
 
-                                    LogosText {
+                                    LogosText { textFormat: Text.PlainText;
                                         visible: !pCard.showRes
                                         text: "Results after you vote"
                                         color: root.qkMuted
                                         font.pixelSize: Theme.typography.secondaryText
                                         font.italic: true
                                     }
-                                    LogosText {
+                                    LogosText { textFormat: Text.PlainText;
                                         visible: pCard.voted
                                         Layout.fillWidth: true
                                         text: "You voted “" + root.pollOptionTitle(pCard.poll, pCard.poll.myVote) + "”"
@@ -1776,13 +1776,13 @@ Item {
                                         visible: root.canManagePolls
                                         Layout.fillWidth: true
                                         spacing: Theme.spacing.large
-                                        LogosText {
+                                        LogosText { textFormat: Text.PlainText;
                                             text: pCard.poll.active ? "Close poll" : "Reopen poll"
                                             color: root.qkTeal; font.pixelSize: Theme.typography.secondaryText
                                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                                                 onClicked: root.act("setPollActive", [pCard.poll.id, pCard.poll.active ? "false" : "true"], "Could not change the poll") }
                                         }
-                                        LogosText {
+                                        LogosText { textFormat: Text.PlainText;
                                             text: "Delete"
                                             color: Theme.palette.error; font.pixelSize: Theme.typography.secondaryText
                                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -1808,7 +1808,7 @@ Item {
                 color: Theme.palette.backgroundSecondary
                 border.color: Theme.palette.error; border.width: 1
                 implicitHeight: toastLbl.implicitHeight + 2 * Theme.spacing.small
-                LogosText {
+                LogosText { textFormat: Text.PlainText;
                     id: toastLbl
                     anchors.left: parent.left; anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
@@ -1843,13 +1843,13 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.margins: Theme.spacing.large
                 spacing: Theme.spacing.medium
-                LogosText {
+                LogosText { textFormat: Text.PlainText;
                     Layout.fillWidth: true
                     text: root.confirmDeleteKind === "poll" ? "Delete this poll?" : "Delete this Q&A?"
                     color: Theme.palette.text; font.weight: Theme.typography.weightBold
                     font.pixelSize: Theme.typography.primaryText
                 }
-                LogosText {
+                LogosText { textFormat: Text.PlainText;
                     Layout.fillWidth: true
                     text: root.confirmDeleteKind === "poll"
                           ? "“" + root.confirmDeleteTitle + "” and its votes will be deleted for everyone in this Q&A. This can't be undone."
@@ -1865,14 +1865,14 @@ Item {
                         implicitHeight: cancelLbl.implicitHeight + Theme.spacing.small
                         radius: Theme.spacing.radiusSmall; color: "transparent"
                         border.color: Theme.palette.borderHairline; border.width: 1
-                        LogosText { id: cancelLbl; anchors.centerIn: parent; text: "Cancel"; color: Theme.palette.text; font.pixelSize: Theme.typography.secondaryText }
+                        LogosText { textFormat: Text.PlainText; id: cancelLbl; anchors.centerIn: parent; text: "Cancel"; color: Theme.palette.text; font.pixelSize: Theme.typography.secondaryText }
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.confirmDeleteId = "" }
                     }
                     Rectangle {
                         implicitWidth: delLbl.implicitWidth + 2 * Theme.spacing.medium
                         implicitHeight: delLbl.implicitHeight + Theme.spacing.small
                         radius: Theme.spacing.radiusSmall; color: Theme.palette.error
-                        LogosText { id: delLbl; anchors.centerIn: parent; text: "Delete"; color: "#ffffff"; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightBold }
+                        LogosText { textFormat: Text.PlainText; id: delLbl; anchors.centerIn: parent; text: "Delete"; color: "#ffffff"; font.pixelSize: Theme.typography.secondaryText; font.weight: Theme.typography.weightBold }
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.doDelete() }
                     }
                 }
