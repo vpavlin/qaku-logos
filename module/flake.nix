@@ -8,7 +8,9 @@
     logos-module-builder.url = "github:logos-co/logos-module-builder/afe4430ee6eb7ba45c08a516a43e18500720c715";
     delivery_module.inputs.logos-module-builder.follows = "logos-module-builder";
     # The QAKU engine/sync CORE module - this ui module is a thin view over it.
-    qaku_core.url = "path:../qaku_core";
+    # github, not path:../qaku_core — a relative path input doesn't resolve when this subflake is
+    # fetched on its own (CI, other platforms).
+    qaku_core.url = "github:vpavlin/qaku-logos/d782975e2ad26ca341489a5cbae4782f6a62edcb?dir=qaku_core";
     qaku_core.inputs.logos-module-builder.follows = "logos-module-builder";
     qaku_core.inputs.delivery_module.follows = "delivery_module";
   };
