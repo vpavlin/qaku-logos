@@ -2,17 +2,10 @@
   description = "QAKU - Logos Basecamp ui_qml Q&A module (pure QML view over the qaku_core event-log engine)";
 
   inputs = {
-    # Same pinned SDK rev + delivery_module the core builds against, so the view,
-    # core, and delivery all build against ONE SDK (avoids cross-module IPC skew).
-    delivery_module.url = "github:logos-co/logos-delivery-module/0fb3a7427b29c98ab0fa2465bcd1e90cbfdf50a3";
-    logos-module-builder.url = "github:logos-co/logos-module-builder/afe4430ee6eb7ba45c08a516a43e18500720c715";
-    delivery_module.inputs.logos-module-builder.follows = "logos-module-builder";
-    # The QAKU engine/sync CORE module - this ui module is a thin view over it.
-    # github, not path:../qaku_core — a relative path input doesn't resolve when this subflake is
-    # fetched on its own (CI, other platforms).
-    qaku_core.url = "github:vpavlin/qaku-logos/d782975e2ad26ca341489a5cbae4782f6a62edcb?dir=qaku_core";
-    qaku_core.inputs.logos-module-builder.follows = "logos-module-builder";
-    qaku_core.inputs.delivery_module.follows = "delivery_module";
+    # port/0.3: builder 0.3.1 — the same builder as qaku_core and loam_core (one SDK).
+    logos-module-builder.url = "github:logos-co/logos-module-builder/0.3.1";
+    # The QAKU engine/sync CORE module — this ui module is a thin view over it.
+    qaku_core.url = "github:vpavlin/qaku-logos/3dd49e594ce46d31f157a5b080a6317cb0857a60?dir=qaku_core";
   };
 
   outputs = inputs@{ logos-module-builder, ... }:
