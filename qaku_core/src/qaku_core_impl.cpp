@@ -262,7 +262,9 @@ void QakuCoreImpl::onContextReady() {
     setStatus("Ready");
     loadOverlayConfig();
     applyOverlayConfig();   // no-op unless the user enabled it; default is OFF
-    bootstrapDelivery();
+    // Logos 0.3.x rejects calls a module makes while it is still loading ("auth token not
+    // recognized"), so module calls start once loading has finished (cf. scala startModules()).
+    QTimer::singleShot(1000, [this] { bootstrapDelivery(); });
     // Periodic sync for EVERY client (not just hubs): an RBSR catch-up round so a peer that
     // missed live traffic reconciles the EXACT delta with whoever is online — the recovery path
     // a plain client (Basecamp) never had (it only seeded on connect and re-served on request).
