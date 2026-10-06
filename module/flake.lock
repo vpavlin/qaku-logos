@@ -5911,18 +5911,18 @@
       },
       "locked": {
         "dir": "core",
-        "lastModified": 1790961049,
-        "narHash": "sha256-WRLDjb1OvxYYzc/njfEpJhnGB95sltfaerBAHi2bnzI=",
+        "lastModified": 1791212893,
+        "narHash": "sha256-6h2ldccvvMEUrTKvgVlxDQD2zOxv5eqAE/RbsWPjCsA=",
         "owner": "vpavlin",
         "repo": "loam-basecamp",
-        "rev": "7ec67c43c9357e787945eb731388c5dc89d31b7c",
+        "rev": "f66ad0ac8973a314f17eca12e4ce0b9939b1a19a",
         "type": "github"
       },
       "original": {
         "dir": "core",
         "owner": "vpavlin",
         "repo": "loam-basecamp",
-        "rev": "7ec67c43c9357e787945eb731388c5dc89d31b7c",
+        "rev": "f66ad0ac8973a314f17eca12e4ce0b9939b1a19a",
         "type": "github"
       }
     },
@@ -629018,18 +629018,18 @@
       },
       "locked": {
         "dir": "qaku_core",
-        "lastModified": 1791003362,
-        "narHash": "sha256-L7K8rSPUOea9VdnR59/ESBpFJA7g/VxHUL/QkgVPKoo=",
+        "lastModified": 1791256212,
+        "narHash": "sha256-Yj42BWf3HOuwig+Bc/mhC+6fGp1sgOHq+MEiQmuj00c=",
         "owner": "vpavlin",
         "repo": "qaku-logos",
-        "rev": "3dd49e594ce46d31f157a5b080a6317cb0857a60",
+        "rev": "377692db4e12f102a4c6625379f6e1f384f70010",
         "type": "github"
       },
       "original": {
         "dir": "qaku_core",
         "owner": "vpavlin",
         "repo": "qaku-logos",
-        "rev": "3dd49e594ce46d31f157a5b080a6317cb0857a60",
+        "rev": "377692db4e12f102a4c6625379f6e1f384f70010",
         "type": "github"
       }
     },

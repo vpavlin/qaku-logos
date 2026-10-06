@@ -1,5 +1,14 @@
 # Changelog
 
+## qaku_core 0.3.0 / qaku view 0.3.0 / mobile 0.1.79 - a Loam identity per room, moderator invites
+
+Each new Q&A is signed by its own identity from Loam (one root, a different key per room,
+context = the room's topic hash), so nobody can link your questions across rooms. Without a
+Loam root the device key is used as before; existing rooms keep the key they were created with.
+Owners and admins can make one-time moderator invite links (`qaku://join?s=...&inv=...`):
+whoever opens one first becomes an admin, under their identity for that room. See
+docs/adr/0001-per-room-loam-identities-and-moderator-invites.md.
+
 ## v0.1.8 - OBS stream overlay
 
 qaku_core can now publish the live Q&A as a transparent HTML page on loopback, so a

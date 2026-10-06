@@ -698,9 +698,9 @@ Item {
                         font.pixelSize: Theme.typography.badgeText
                         font.weight: Theme.typography.weightMedium
                     }
-                    // The signing address (from sign.key) — read-only. NOT editable: this is
-                    // your cryptographic identity, and it's what an owner adds to make you an
-                    // admin. Copy it; don't type over it.
+                    // The signing address IN THIS Q&A — read-only. With a Loam identity it is
+                    // different in every Q&A (docs/adr/0001); otherwise it is the device key
+                    // (sign.key). It's what an owner adds to make you an admin.
                     LogosText { textFormat: Text.PlainText;
                         Layout.fillWidth: true
                         text: root.st.address || root.st.deviceId || ""
@@ -708,6 +708,24 @@ Item {
                         font.pixelSize: Theme.typography.badgeText
                         font.family: "monospace"
                         wrapMode: Text.WrapAnywhere
+                    }
+                    LogosText { textFormat: Text.PlainText;
+                        Layout.fillWidth: true
+                        readonly property var idn: root.st.identity || ({})
+                        text: idn.mode === "loam" ? "Loam identity for this Q&A only - not linkable to your other Q&As"
+                            : idn.mode === "pending" ? "Choosing this Q&A's identity (asking Loam)..."
+                            : "This device's key - the same in every Q&A (set up an identity in Loam for unlinkable ones)"
+                        color: root.qkMuted
+                        font.pixelSize: Theme.typography.badgeText
+                        wrapMode: Text.WordWrap
+                    }
+                    LogosText { textFormat: Text.PlainText;
+                        Layout.fillWidth: true
+                        visible: !!(root.st.identity && root.st.identity.error)
+                        text: (root.st.identity && root.st.identity.error ? root.st.identity.error : "") + (root.st.identity && root.st.identity.waiting ? (" - " + root.st.identity.waiting + " waiting") : "")
+                        color: "#e6194b"
+                        font.pixelSize: Theme.typography.badgeText
+                        wrapMode: Text.WordWrap
                     }
                     RowLayout {
                         Layout.fillWidth: true
@@ -1106,6 +1124,56 @@ Item {
                                     LogosButton {
                                         text: "Copy"
                                         onClicked: { clip.text = root.secret; clip.selectAll(); clip.copy(); root.toast("Secret copied - share it to let a peer join"); }
+                                    }
+                                }
+
+                                // ---- moderator invites (docs/adr/0001): a one-time link, whoever opens it
+                                // first becomes an admin. Pending tickets are listed with Revoke. ----
+                                LogosText { textFormat: Text.PlainText;
+                                    visible: root.isAdmin
+                                    text: "Invite a moderator"
+                                    color: Theme.palette.textTertiary
+                                    font.pixelSize: Theme.typography.badgeText
+                                    font.weight: Theme.typography.weightMedium
+                                }
+                                RowLayout {
+                                    visible: root.isAdmin
+                                    Layout.fillWidth: true
+                                    spacing: Theme.spacing.small
+                                    AppField {
+                                        Layout.fillWidth: true
+                                        readOnly: true
+                                        placeholderText: "One-time link: whoever opens it first becomes an admin"
+                                        text: root.st.inviteLink || ""
+                                    }
+                                    LogosButton {
+                                        text: root.isBusy("createInvite") ? "..." : "New link"
+                                        enabled: !root.isBusy("createInvite")
+                                        onClicked: root.act("createInvite", [], "Could not create an invite")
+                                    }
+                                    LogosButton {
+                                        text: "Copy"
+                                        enabled: (root.st.inviteLink || "").length > 0
+                                        onClicked: { clip.text = root.st.inviteLink; clip.selectAll(); clip.copy(); root.toast("Invite link copied - share it privately"); }
+                                    }
+                                }
+                                Repeater {
+                                    model: root.isAdmin && root.st.invites ? Object.keys(root.st.invites) : []
+                                    delegate: RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Theme.spacing.small
+                                        LogosText { textFormat: Text.PlainText;
+                                            Layout.fillWidth: true
+                                            text: "Unused invite " + modelData.substring(0, 6) + "..." + modelData.substring(modelData.length - 4)
+                                            color: root.qkMuted
+                                            font.pixelSize: Theme.typography.badgeText
+                                            font.family: "monospace"
+                                        }
+                                        LogosButton {
+                                            text: "Revoke"
+                                            implicitWidth: 80; implicitHeight: 30
+                                            onClicked: root.act("revokeInvite", [modelData], "Could not revoke the invite")
+                                        }
                                     }
                                 }
                             }
