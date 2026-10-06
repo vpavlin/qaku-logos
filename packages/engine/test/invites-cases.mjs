@@ -1,4 +1,4 @@
-// Moderator invite tickets (ADR 0013) — a shared JS<->C++ scenario. Every event is REALLY
+// Moderator invite tickets (qaku ADR 0001) — a shared JS<->C++ scenario. Every event is REALLY
 // signed (deterministic keys, RFC6979 → byte-identical on every run), because the fold only
 // counts ticket events signed by their author. gen-invites-vectors.mjs writes the log + the JS
 // projection to vectors/invites.json; invites.test.mjs and qaku_core/test/engine_harness.cpp

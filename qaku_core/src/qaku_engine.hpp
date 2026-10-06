@@ -19,7 +19,7 @@
 // event-type constants, Admission, and the whole Q&A fold below (ADR 0007/0010).
 #include "logos_sync/event.hpp"
 #include "logos_sync/merge.hpp"
-// verifyEvent / verifyInviteClaim: invite tickets are folded in admitEvents (ADR 0013).
+// verifyEvent / verifyInviteClaim: invite tickets are folded in admitEvents (qaku ADR 0001).
 #include "qaku_identity.hpp"
 
 namespace qaku {
@@ -56,7 +56,7 @@ namespace T {
     constexpr const char* POLL_DELETE    = "poll.delete";
     constexpr const char* POLL_VOTE      = "poll.vote";
     constexpr const char* PROFILE_SET    = "profile.set";   // self-scoped display name (participant)
-    constexpr const char* MEMBER_INVITE  = "member.invite"; // {ticket,role} invite ticket (ADR 0013), owner/admin
+    constexpr const char* MEMBER_INVITE  = "member.invite"; // {ticket,role} invite ticket (qaku ADR 0001), owner/admin
     constexpr const char* MEMBER_CLAIM   = "member.claim";  // {ticket,ticketPub,member,ticketSig} redeem it, first valid wins
 }
 
@@ -135,7 +135,7 @@ struct Admission { std::vector<Event> admitted; std::string owner; std::vector<s
 // session.create; admins folded in HLC order gated by the current set; content
 // events owner/admin-gated; question edit/delete author-or-admin; participant
 // events open. Order-independent (folds the full set first).
-// Invite tickets (ADR 0013, mirror of engine.mjs): member.invite must be SIGNED by a current
+// Invite tickets (qaku ADR 0001, mirror of engine.mjs): member.invite must be SIGNED by a current
 // owner/admin (role "admin" offers, "revoke" withdraws a pending ticket); member.claim must be
 // SIGNED by `member`, member != owner, the ticket pending, and ticketSig a low-S signature by
 // ticketPub over "qaku-invite-claim-v1|roomId|ticket|member". First valid claim in HLC order
@@ -213,7 +213,7 @@ inline Admission admitEvents(const std::vector<Event>& evs, const std::string& r
 // answers:[...]}], polls:[{...,results,tally,votes,myVote}], counts}. Mirror of
 // computeState. `me` = the viewer's author address; only used for each poll's myVote
 // (that voter's live optionId, or null). Empty = no viewer (myVote always null).
-// roomId = the room's topic hash; invite claims are bound to it (ADR 0013).
+// roomId = the room's topic hash; invite claims are bound to it (qaku ADR 0001).
 inline json computeState(const std::vector<Event>& evs, const std::string& me = std::string(), const std::string& roomId = std::string()) {
     auto adm = admitEvents(evs, roomId);
     const auto& ordered = adm.admitted;

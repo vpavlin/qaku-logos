@@ -21,7 +21,7 @@
 #include <nlohmann/json.hpp>
 #include "qaku_crypto.hpp"   // Bytes, toHex, sha256, RAND
 // Event / HLC straight from logos-sync (NOT qaku_engine.hpp): the engine includes THIS header
-// for verifyEvent / verifyInviteClaim (invite tickets are folded in admitEvents, ADR 0013).
+// for verifyEvent / verifyInviteClaim (invite tickets are folded in admitEvents, qaku ADR 0001).
 #include "logos_sync/event.hpp"
 
 namespace qaku {
@@ -203,7 +203,7 @@ inline bool isLowerHex(const std::string& s, size_t n) {
     return true;
 }
 
-// --- external signers (Loam hdSign, ADR 0013): stamp + digest here, sign in loam_core, attach ---
+// --- external signers (Loam hdSign, qaku ADR 0001): stamp + digest here, sign in loam_core, attach ---
 inline void stampAuthor(Event& e, const std::string& address) { e.dev = address; e.hlc.dev = address; }
 inline std::string eventDigestHex(const Event& e) {
     Bytes d = sha256(strBytes(canonicalMessage(e)));
@@ -236,7 +236,7 @@ inline bool verifyEvent(const Event& e) {
     return ecdsaVerify(pub, digest, sig);
 }
 
-// --- moderator invite tickets (ADR 0013) - mirrors identity.mjs inviteClaimMessage/sign/verify ---
+// --- moderator invite tickets (qaku ADR 0001) - mirrors identity.mjs inviteClaimMessage/sign/verify ---
 inline std::string inviteClaimMessage(const std::string& roomId, const std::string& ticket, const std::string& member) {
     return "qaku-invite-claim-v1|" + roomId + "|" + ticket + "|" + member;
 }

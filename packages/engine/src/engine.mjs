@@ -82,7 +82,7 @@ const PARTICIPANT_EVENTS = new Set([
  * events are dropped deterministically (same input set ⇒ same result in any
  * arrival order), so convergence still holds. This is enforcement-on-merge:
  * attribution, not cryptographic authorization.
- * Invite tickets (ADR 0013) fold in the same HLC-ordered pass as admin.add/remove:
+ * Invite tickets (qaku ADR 0001) fold in the same HLC-ordered pass as admin.add/remove:
  *   member.invite {ticket, role} — SIGNED by a current owner/admin; role "admin" offers admin
  *     to whoever holds the ticket key, "revoke" withdraws a pending ticket. A redeemed ticket
  *     can't be re-offered or revoked (use admin.remove).
@@ -110,7 +110,7 @@ export function admitEvents(events, roomId = "") {
   // Fold the admin set in HLC order, each membership change gated by the set.
   const admins = new Set();
   if (owner) admins.add(owner);
-  const invites = new Map();      // pending ticket -> offered role (ADR 0013)
+  const invites = new Map();      // pending ticket -> offered role (qaku ADR 0001)
   const claimed = new Set();      // redeemed tickets (one-time)
   const ticketEvents = new Set(); // ids of the invite/claim events that took effect
   for (const e of ordered) {
@@ -211,7 +211,7 @@ function foldUpvotes(ordered) {
  * @param {object[]} events
  * @param {{me?: string, roomId?: string}} [opts] `me` = the viewer's identity (author
  *   address); only used to emit each poll's `myVote` (that voter's live optionId, or null).
- *   `roomId` = the room's topic hash, which invite claims are bound to (ADR 0013).
+ *   `roomId` = the room's topic hash, which invite claims are bound to (qaku ADR 0001).
  */
 export function computeState(events, opts = {}) {
   const me = opts && typeof opts.me === "string" && opts.me ? opts.me : null;

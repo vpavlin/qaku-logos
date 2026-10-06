@@ -1,4 +1,4 @@
-// Per-room Loam identities (ADR 0013, loam-keycard ADR 0001). A tiny reference of loam-keycard's
+// Per-room Loam identities (qaku ADR 0001, loam-keycard ADR 0001). A tiny reference of loam-keycard's
 // hd.ts (BIP39 seed + hardened BIP32 at m/43'/60'/1581'/A'/C0'..C3') built on @noble only, checked
 // against loam-keycard's shared vectors (vectors/loam-hd.json, copied verbatim), then used to show:
 //   - two QAKU rooms give the SAME root two different, unrelated author addresses;

@@ -12,7 +12,7 @@ export const EventType = {
   SESSION_CONFIG: "session.config",   // LWW-by-HLC per field (title/desc/enabled/moderation)
   ADMIN_ADD: "admin.add",             // owner/admin grants admin
   ADMIN_REMOVE: "admin.remove",       // owner/admin revokes admin (soft; owner is permanent)
-  // --- moderator invite tickets (ADR 0013): no address needed up front ---
+  // --- moderator invite tickets (qaku ADR 0001): no address needed up front ---
   MEMBER_INVITE: "member.invite",     // { ticket, role:"admin"|"revoke" } — owner/admin offers admin to the ticket holder
   MEMBER_CLAIM: "member.claim",       // { ticket, ticketPub, member, ticketSig } — redeem it (first valid claim wins)
 
@@ -73,7 +73,7 @@ export const ev = {
   adminRemove: (hlc, { memberId }, id) =>
     makeEvent(EventType.ADMIN_REMOVE, hlc, { memberId }, id),
 
-  // Invite tickets (ADR 0013). ticket = address of a one-time key that travels in the invite
+  // Invite tickets (qaku ADR 0001). ticket = address of a one-time key that travels in the invite
   // link; role "admin" offers admin, "revoke" withdraws a still-pending ticket.
   memberInvite: (hlc, { ticket, role = "admin" }, id) =>
     makeEvent(EventType.MEMBER_INVITE, hlc, { ticket, role }, id),

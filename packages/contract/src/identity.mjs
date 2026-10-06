@@ -88,7 +88,7 @@ export function signEvent(identity, ev) {
   return ev;
 }
 
-// --- external signers (Loam, ADR 0013) --------------------------------------------------
+// --- external signers (Loam, qaku ADR 0001) --------------------------------------------------
 // When the key lives in Loam (phone: loamSign over AIDL; desktop: loam_core.hdSign), signing is
 // split in two: stamp the author + compute the digest here, have Loam sign it, then attach.
 // Same bytes as signEvent: signEvent(id, ev) === attachSignature(prepareForSigning(ev, addr)...).
@@ -108,7 +108,7 @@ export function attachSignature(ev, pubHex, sigHex) {
   return ev;
 }
 
-// --- moderator invite tickets (ADR 0013; same scheme as scala ADR 0022) -----------------
+// --- moderator invite tickets (qaku ADR 0001; same scheme as scala ADR 0022) -----------------
 // The invite link carries a one-time TICKET private key. An owner/admin posts
 // member.invite {ticket: address(ticketPub), role}; whoever opens the link posts
 // member.claim {ticket, ticketPub, member, ticketSig} under THEIR identity for this room.

@@ -173,7 +173,7 @@ static void registryFresh() {
     printf("registry fresh flag ok\n");
 }
 
-// Invite tickets (ADR 0013): the C++ signer/verifier on their own (the fold itself is checked
+// Invite tickets (qaku ADR 0001): the C++ signer/verifier on their own (the fold itself is checked
 // against the JS-signed vectors/invites.json by parity()).
 static void inviteCrypto() {
     Bytes tpriv(32, 0); tpriv[31] = 0x21;

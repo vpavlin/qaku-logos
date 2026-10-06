@@ -1,4 +1,4 @@
-// Moderator invite tickets (ADR 0013): outcome checks + convergence. vectors/invites.json is
+// Moderator invite tickets (qaku ADR 0001): outcome checks + convergence. vectors/invites.json is
 // folded by the C++ harness too (qaku_core/test/engine_harness.cpp) - passing both = parity.
 import { test } from "node:test";
 import assert from "node:assert/strict";
