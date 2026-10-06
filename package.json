@@ -5,6 +5,6 @@
   "type": "module",
   "description": "QAKU rebuilt as a Logos multi-writer app: event-log CRDT core, Basecamp module, RN mobile.",
   "scripts": {
-    "test": "node --test packages/engine/test/convergence.test.mjs packages/engine/test/rules.test.mjs packages/sync/test/sync.test.mjs"
+    "test": "node --test packages/engine/test/convergence.test.mjs packages/engine/test/rules.test.mjs packages/engine/test/invites.test.mjs packages/contract/test/hd-identities.test.mjs packages/sync/test/sync.test.mjs"
   }
 }

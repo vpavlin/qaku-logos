@@ -19,6 +19,7 @@ export function project(st) {
     session: s ? { id: s.id, title: s.title, description: s.description, enabled: s.enabled, moderationEnabled: s.moderationEnabled } : null,
     owner: st.owner || "",
     admins: [...st.admins].sort(),
+    invites: st.invites,
     names: st.names,
     questions: st.questions.map((q) => ({
       id: q.id, content: q.content, author: q.author, moderated: q.moderated,
