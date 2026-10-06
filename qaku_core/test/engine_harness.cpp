@@ -25,6 +25,7 @@
 #include <algorithm>
 #include "qaku_engine.hpp"
 #include "qaku_persist_std.hpp"
+#include "logos_sync/catchup.hpp"
 
 using namespace qaku;
 
@@ -208,12 +209,48 @@ static void inviteCrypto() {
     printf("invite crypto ok\n");
 }
 
+// Regression (live e2e 2026-10-06): a joiner never received the room history because both
+// desktops used the default transport id "qaku-core" - catch-up frames from a peer with OUR id are
+// dropped as self-echo. Simulate the RBSR exchange the module runs (respond() per frame, served
+// events merged) between an owner holding the log and an empty joiner.
+static size_t catchupBetween(const std::string& ownerId, const std::string& joinerId) {
+    std::vector<Event> owner = { mk("c", T::SESSION_CREATE, 1, "0xA", {{"sessionId", "r"}, {"title", "t"}}),
+                                 mk("q", T::QUESTION_ADD, 2, "0xA", {{"questionId", "q1"}, {"content", "hi"}}) };
+    std::vector<Event> joiner;
+    // frames in flight: (to-joiner?, msg)
+    std::vector<std::pair<bool, json>> wire = { {false, logos_sync::catchup::buildInitial(joiner, joinerId)},
+                                               {true, logos_sync::catchup::buildInitial(owner, ownerId)} };
+    for (int round = 0; round < 20 && !wire.empty(); round++) {
+        std::vector<std::pair<bool, json>> next;
+        for (auto& f : wire) {
+            bool toJoiner = f.first;
+            auto st = logos_sync::catchup::respond(toJoiner ? joiner : owner, f.second, toJoiner ? joinerId : ownerId);
+            for (auto& r : st.replies) next.push_back({!toJoiner, r});
+            for (auto& e : st.serve) {
+                auto& dst = toJoiner ? owner : joiner;
+                bool have = false; for (auto& x : dst) if (x.id == e.id) have = true;
+                if (!have) dst.push_back(e);
+            }
+        }
+        wire.swap(next);
+    }
+    return joiner.size();
+}
+static void deviceIds() {
+    std::string a = persist::newDeviceId(), b = persist::newDeviceId();
+    CHECK(a != b && a != "qaku-core" && a.rfind("qaku-core-", 0) == 0 && a.size() == 22, "newDeviceId is unique per install");
+    CHECK(catchupBetween("qaku-core", "qaku-core") == 0, "sanity: with the SAME transport id the joiner gets nothing (the bug)");
+    CHECK(catchupBetween(a, b) == 2, "with distinct ids the joiner catches up the whole log");
+    printf("device ids + catch-up ok\n");
+}
+
 int main(int argc, char** argv) {
     const char* vec = argc > 1 ? argv[1] : "packages/engine/test/vectors/rules.json";
     const char* inv = argc > 2 ? argv[2] : "packages/engine/test/vectors/invites.json";
     parity(vec);
     parity(inv);
     inviteCrypto();
+    deviceIds();
     crashCases();
     registryFresh();
     if (g_fail) { printf("FAIL (%d)\n", g_fail); return 1; }

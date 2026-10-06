@@ -470,8 +470,14 @@ void QakuCoreImpl::onContextReady() {
     // Device id: env QAKU_DEVICE_ID (hub/tests) > persisted device.txt > the
     // default. Persisted so a setDeviceId rename survives restart. Env wins on
     // every launch when set.
+    // No env + nothing persisted (or the old shared default) -> mint a unique id and persist it:
+    // every install sharing "qaku-core" made peers drop each other's catch-up as self-echo.
     if (const char* d = std::getenv("QAKU_DEVICE_ID")) m_deviceId = d;
-    else if (!m_dataDir.empty()) { std::string p = qaku::persist::readDeviceId(m_dataDir); if (!p.empty()) m_deviceId = p; }
+    else {
+        std::string p = qaku::persist::readDeviceId(m_dataDir);
+        if (p.empty() || p == "qaku-core") { p = qaku::persist::newDeviceId(); qaku::persist::writeDeviceId(m_dataDir, p); }
+        m_deviceId = p;
+    }
     loadOrCreateSignKey();   // our secp256k1 author identity (m_myAddress) — before any fold/authoring
     if (!m_dataDir.empty()) { std::ifstream nf(m_dataDir + "/myname.txt"); if (nf) { std::getline(nf, m_myName); m_myName = qaku::utf8Clip(m_myName, qaku::NAME_MAX_CP); } }   // older builds cut at 40 BYTES: drop a split trailing char
     // Load persisted sessions (registry + each pair.key + log.json), or create a
