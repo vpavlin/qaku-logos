@@ -25,6 +25,7 @@
 #include <vector>
 #include <set>
 #include <map>
+#include <functional>
 #include <mutex>
 #include <memory>
 
@@ -61,6 +62,10 @@ public:
     std::string setConfig(std::string patchJson);
     std::string addAdmin(std::string memberId, std::string name);
     std::string removeAdmin(std::string memberId);
+    // Moderator invite tickets (docs/adr/0001). createInvite puts snapshot().inviteLink: a one-time
+    // qaku://join?s=...&inv=... link; whoever opens it first becomes an admin. Owner/admin only.
+    std::string createInvite();
+    std::string revokeInvite(std::string ticket);
 
     // --- questions (operate on the current session) ---
     std::string addQuestion(std::string content);
@@ -129,11 +134,37 @@ private:
         // would broadcast the host's stream direction to every participant.
         std::set<std::string> onStream;
         long long wall = 0, ctr = 0;
+        // Identity (docs/adr/0001). idMode: "device" = sign.key (rooms from before identities, or
+        // no Loam root); "loam" = loam_core's identity for ("qaku", topic hash), unlinkable across
+        // rooms; "" = new room, deciding (waiting for loam_core.hdStatus). Persisted in identity.json
+        // once decided, never switched.
+        std::string idMode;
+        std::string idAddress, idPub;   // the Loam identity (empty until hdIdentity answered)
+        std::string idError;            // why our events are waiting (locked / no answer), "" = fine
+        // Our events waiting for a Loam signature, in authoring order (persisted in outbox.json).
+        std::vector<qaku::Event> outbox;
+        std::map<std::string, std::string> claimKeys;   // outbox member.claim id -> ticket key hex
+        bool signing = false;           // one hdIdentity/hdSign in flight for this session
+        std::string inviteLink;         // the invite link made last (shown once, never persisted)
     };
 
     // event builders + per-session helpers
     qaku::HLC nextHlc(Session& s);
     void pushEvent(Session& s, qaku::Event e, bool broadcast);   // by value: signed in place when broadcast
+    void commitOwn(Session& s, const qaku::Event& e);            // append + persist + send our signed event
+    // identity (docs/adr/0001)
+    std::string roomIdOf(const Session& s) const;                // the topic hash = Loam context + invite room id
+    std::string addrOf(const Session& s) const;                  // our author address in s ("" while unresolved)
+    nlohmann::json foldOf(const Session& s) const;
+    void finalizeForAuthor(Session& s, qaku::Event& e, const std::string& addr);
+    void pumpIdentity(const std::string& sessionId);
+    void pumpAllIdentities();
+    void queryHdStatus();
+    void saveIdentity(Session& s);
+    void loadIdentity(Session& s);
+    void saveOutbox(Session& s);
+    void loadOutbox(Session& s);
+    void onLoop(std::function<void()> fn);
     // Receive-path debounce: mark a session dirty + arm m_flushTimer; flushDirty persists
     // each dirty session once and publishes state once per burst.
     void scheduleFlush(Session& s);
@@ -185,6 +216,9 @@ private:
     qaku::SignId m_signId;
     std::string m_myAddress;
     std::string m_myName;          // display name (pseudonym); authored as profile.set per session
+    // loam_core HD root (docs/adr/0001): unknown until hdStatus answers; then exists or not.
+    bool m_hdKnown = false, m_hdExists = false, m_hdQuerying = false;
+    int m_hdFailures = 0;          // consecutive failed hdStatus calls (3 = treat as "no Loam")
     void loadOrCreateSignKey();
     void emitProfileSet(Session& s);   // author a profile.set (our display name) into a keyed session
     std::string m_snapshot = "{}";

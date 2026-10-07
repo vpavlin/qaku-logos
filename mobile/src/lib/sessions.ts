@@ -2,7 +2,10 @@
 // its own shared secret → seal/open key + derived content topic + event log; they all
 // ride the shared loam-transport (multi-topic). This is qaku's analogue of KYM's
 // multi-budget: a registry of joined rooms, per-room fold, and authoring that SIGNS with
-// this device's key (verifiable author) and SEALS with the room's household key.
+// the room's identity (verifiable author) and SEALS with the room's household key.
+// Identities (docs/adr/0001): a new room is bound to the Loam identity for (qaku, topic hash)
+// when Loam holds a root — unlinkable across rooms — else to this device's key. The binding
+// is stored with the room and never changes (a role in the room depends on it).
 import * as transport from "./loam-transport";
 import { deriveIdentity, topicFor, seal, open, newSecret, randToken as randSealToken, Identity as SealId } from "./crypto";
 import { encodeEvent } from "./wire";
@@ -10,12 +13,13 @@ import { buildInitial, respond } from "./catchup";
 import { utf8Bytes, utf8Decode } from "./utf8";
 import { getDeviceId } from "./device";
 import { getIdentity, Identity, shortAddr } from "./identity";
+import * as Crypto from "expo-crypto";
 // @ts-ignore - shared reference implementation (metro resolves the relative .mjs)
 import { computeState } from "../../../packages/engine/src/engine.mjs";
 // @ts-ignore
 import { Clock, ev } from "../../../packages/contract/src/index.mjs";
 // @ts-ignore
-import { signEvent } from "../../../packages/contract/src/identity.mjs";
+import { signEvent, stampAuthor, eventDigestHex, attachSignature, verifyEvent, identityFromPriv, signInviteClaim } from "../../../packages/contract/src/identity.mjs";
 import * as SecureStore from "expo-secure-store";
 import * as FileSystem from "expo-file-system";
 
@@ -36,16 +40,30 @@ const fromHex = (s: string) => { const a = new Uint8Array(s.length / 2); for (le
 const rid = () => Math.random().toString(16).slice(2, 14);
 const REG_KEY = "qaku-rooms-v1";
 
-export type RoomMeta = { topicHash: string; secretHex: string; title: string };
-type Room = { meta: RoomMeta; sealId: SealId; topic: string; log: any[]; ids: Set<string>; clock: any; deleted?: boolean };
+// idMode: "loam" = signed by Loam's identity for (qaku, topicHash); "device" (or missing, for
+// rooms from before identities) = this device's key. idAddress/idPub: the Loam identity.
+export type RoomMeta = { topicHash: string; secretHex: string; title: string; idMode?: "loam" | "device"; idAddress?: string; idPub?: string };
+type Room = { meta: RoomMeta; sealId: SealId; topic: string; log: any[]; ids: Set<string>; clock: any; addr: string; deleted?: boolean };
 
-// The shareable pairing artifact — same secret-in-URL model as OG qaku.
+// The shareable pairing artifact — same secret-in-URL model as OG qaku. A moderator invite
+// appends the one-time ticket key: qaku://join?s=<secret>&inv=<ticket key> (docs/adr/0001).
 export const shareUriFor = (secretHex: string) => "qaku://join?s=" + secretHex;
-export function extractSecret(input: string): string {
+export function parseJoinLink(input: string): { secret: string; inv: string } {
   const s = (input || "").trim();
-  const i = s.indexOf("s=");
-  return s.startsWith("qaku://") && i >= 0 ? s.slice(i + 2).trim() : s;
+  if (!s.startsWith("qaku://")) return { secret: s, inv: "" };
+  const q = s.slice(s.indexOf("?") + 1);
+  let secret = "", inv = "";
+  for (const kv of q.split("&")) {
+    const i = kv.indexOf("=");
+    const k = i >= 0 ? kv.slice(0, i) : kv, v = i >= 0 ? kv.slice(i + 1).trim() : "";
+    if (k === "s") secret = v; else if (k === "inv") inv = v;
+  }
+  return { secret, inv };
 }
+export function extractSecret(input: string): string { return parseJoinLink(input).secret; }
+
+const LOAM_ADDR = /^0x[0-9a-f]{40}$/;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class Sessions {
   private rooms = new Map<string, Room>();   // topic -> Room
@@ -69,8 +87,10 @@ export class Sessions {
   private connectedAt = 0;
   onNewQuestion: ((topicHash: string, content: string, title: string) => void) | null = null;
   notifyAttempts = 0;   // diagnostic: how many times we've asked to fire a question notification
-  myAddress = "";
+  myAddress = "";   // this DEVICE's key (rooms without Loam); a room's author address is addressIn(h)
   myName = "";
+  identityError = "";   // last failure to sign with a room's Loam identity (shown in the room)
+  inviteLinks: Record<string, string> = {};   // topicHash -> the invite link made last (shown once)
   nodeMode: "Core" | "Edge" = "Edge";   // Edge is the default (start() reads the saved choice; only an explicit "Core" opts in)
   useSharedNode = true;    // route through the device-wide Loam node if installed (default on; "0" = user opted out)
   listeners = new Set<() => void>();
@@ -106,7 +126,46 @@ export class Sessions {
   private makeRoom(meta: RoomMeta): Room {
     const sealId = deriveIdentity(fromHex(meta.secretHex));
     const topic = topicFor(sealId);
-    return { meta: { ...meta, topicHash: topic.split("/")[3] || meta.topicHash }, sealId, topic, log: [], ids: new Set(), clock: new Clock(this.myAddress) };
+    const addr = meta.idMode === "loam" && meta.idAddress ? meta.idAddress : this.myAddress;
+    return { meta: { ...meta, topicHash: topic.split("/")[3] || meta.topicHash }, sealId, topic, log: [], ids: new Set(), clock: new Clock(addr), addr };
+  }
+
+  // Bind a NEW room to an identity (docs/adr/0001), once. Loam holds a root → the Loam identity
+  // for (qaku, topicHash), different in every room. No Loam / no root → this device's key.
+  // Loam holds a root but can't hand out the identity (locked, not answering) → throw: falling
+  // back to the device key would link this room to the others.
+  private async bindIdentity(room: Room) {
+    if (room.meta.idMode) return;
+    const fallback = (e: string) => /no shared Loam node|update/i.test(e);   // own node / Loam too old: no identities
+    let st: any = await transport.loamIdentityStatus().catch((e: any) => ({ error: String(e?.message || e) }));
+    if (st && st.error && !fallback(String(st.error))) {   // transient (not connected yet / no answer): one retry
+      await sleep(2000);
+      st = await transport.loamIdentityStatus().catch((e: any) => ({ error: String(e?.message || e) }));
+    }
+    if (st && st.exists === true) {
+      const id: any = await transport.loamIdentity(room.meta.topicHash).catch((e: any) => ({ error: String(e?.message || e) }));
+      if (!id || id.error || !LOAM_ADDR.test(String(id.address))) throw new Error("Loam couldn't give an identity for this Q&A: " + ((id && id.error) || "bad answer") + ". Unlock Loam and try again.");
+      room.meta = { ...room.meta, idMode: "loam", idAddress: id.address, idPub: id.pubHex };
+    } else if (st && st.exists === false || (st && st.error && fallback(String(st.error)))) {
+      room.meta = { ...room.meta, idMode: "device" };
+    } else {
+      throw new Error("Loam isn't answering (" + ((st && st.error) || "no answer") + "). Try again in a moment.");
+    }
+    room.addr = room.meta.idMode === "loam" ? room.meta.idAddress! : this.myAddress;
+    room.clock.dev = room.addr;
+  }
+
+  // Sign an event as the room's identity. Loam-bound rooms: stamp the author, Loam signs the
+  // digest (20 s timeout in hdCall), check it, attach. Throws on any failure — never re-signs
+  // with the device key (that would link the room).
+  private async signAs(room: Room, event: any) {
+    if (room.meta.idMode !== "loam") { signEvent(this.identity, event); return; }
+    stampAuthor(event, room.addr);
+    const r: any = await transport.loamSign(room.meta.topicHash, eventDigestHex(event)).catch((e: any) => ({ error: String(e?.message || e) }));
+    if (!r || r.error) throw new Error("Loam couldn't sign for this Q&A: " + ((r && r.error) || "no answer"));
+    if (r.address !== room.addr) throw new Error("Loam answered with another identity for this Q&A");
+    attachSignature(event, r.pub, r.sig);
+    if (!verifyEvent(event)) throw new Error("Loam's signature didn't verify");
   }
 
   // Bring the node up on every joined room's topic; then pull history + ask peers.
@@ -245,7 +304,7 @@ export class Sessions {
     // Notify for a question in a starred Q&A that arrives AFTER the initial catch-up flood
     // (past ~12s from connect) — skew-proof: uses wall time since connect, not the event's
     // ts (which comes from another device's clock). Suppresses the reconnect backlog.
-    if (event.type === "question.add" && event.dev !== this.myAddress && this.starred.has(room.meta.topicHash)
+    if (event.type === "question.add" && event.dev !== room.addr && this.starred.has(room.meta.topicHash)
         && this.connectedAt > 0 && Date.now() - this.connectedAt > 12000) {
       this.notifyAttempts++;
       const st = this.state(room.meta.topicHash);
@@ -332,7 +391,10 @@ export class Sessions {
   private async append(room: Room, type: string, payload: any) {
     if (!this.identity) return;
     const event = (ev as any)[type](room.clock.send(), payload);
-    signEvent(this.identity, event);
+    try { await this.signAs(room, event); }
+    catch (e: any) { this.identityError = String(e?.message || e); this.emit(); throw e; }
+    if (this.identityError) this.identityError = "";
+    if (room.deleted) return;
     this.ingest(room, event);
     // Persist our OWN event to disk IMMEDIATELY (not the 400ms debounced save) — otherwise
     // "publish → kill the app → reopen" loses it before the timer fires. Durable before we
@@ -386,12 +448,14 @@ export class Sessions {
   async createRoom(title: string): Promise<string> {
     const secret = newSecret();
     const room = this.makeRoom({ topicHash: "", secretHex: hex(secret), title: title || "New Q&A" });
+    await this.bindIdentity(room);   // before anything is authored: the creator's identity is the owner
     this.rooms.set(room.topic, room); this.byHash.set(room.meta.topicHash, room);
     await this.saveRegistry();
     if (this.started) await transport.join([room.topic]);
     // Author the session.create (owner = us) + our current name, then sync.
-    await this.append(room, "sessionCreate", { sessionId: room.meta.topicHash, title: room.meta.title, description: "" });
-    if (this.myName) await this.append(room, "profileSet", { name: this.myName });
+    try { await this.append(room, "sessionCreate", { sessionId: room.meta.topicHash, title: room.meta.title, description: "" }); }
+    catch (e) { await this.deleteRoom(room.meta.topicHash); throw e; }   // no owner-less room left behind
+    if (this.myName) await this.append(room, "profileSet", { name: this.myName }).catch(() => {});
     this.emit();
     if (this.started) this.syncRoom(room);
     return room.meta.topicHash;
@@ -404,24 +468,57 @@ export class Sessions {
   private joining = new Map<string, Promise<string>>();
 
   async joinRoom(secretInput: string): Promise<string> {
-    const sh = extractSecret(secretInput).toLowerCase();
+    const link = parseJoinLink(secretInput);
+    const sh = link.secret.toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(sh)) throw new Error("Secret must be 64 hex chars or a qaku://join link.");
+    const inv = link.inv.toLowerCase();
+    if (inv && !/^[0-9a-f]{64}$/.test(inv)) throw new Error("This invite link is damaged (bad inv=).");
     const room = this.makeRoom({ topicHash: "", secretHex: sh, title: "Q&A" });
     const h = room.meta.topicHash;
-    if (this.byHash.has(h)) return h; // already joined
-    const inflight = this.joining.get(h);
-    if (inflight) return inflight;
-    const p = this.doJoinRoom(room).finally(() => { this.joining.delete(h); });
-    this.joining.set(h, p);
-    return p;
+    let p: Promise<string>;
+    if (this.byHash.has(h)) p = Promise.resolve(h); // already joined
+    else {
+      const inflight = this.joining.get(h);
+      p = inflight || this.doJoinRoom(room).finally(() => { this.joining.delete(h); });
+      if (!inflight) this.joining.set(h, p);
+    }
+    const joined = await p;
+    if (inv) await this.claimInvite(joined, fromHex(inv));
+    return joined;
   }
 
+  // Redeem a moderator invite ticket (docs/adr/0001): prove we hold the ticket key, for OUR
+  // address in this room. The fold makes us admin if the ticket is pending (first claim wins).
+  private async claimInvite(h: string, ticketPriv: Uint8Array) {
+    const room = this.byHash.get(h); if (!room) return;
+    let c: { ticket: string; ticketPub: string; ticketSig: string };
+    try { c = signInviteClaim(ticketPriv, h, room.addr); } catch { throw new Error("This invite link is damaged (bad ticket key)."); }
+    await this.append(room, "memberClaim", { ticket: c.ticket, ticketPub: c.ticketPub, member: room.addr, ticketSig: c.ticketSig });
+  }
+
+  // Make a one-time moderator invite (owner/admin): a fresh ticket key goes into the link, its
+  // address into a signed member.invite. Returns the link (also kept in inviteLinks to show once).
+  async createInvite(h: string): Promise<string> {
+    const room = this.byHash.get(h); if (!room) throw new Error("No such Q&A");
+    let priv: Uint8Array | null = null;
+    for (let i = 0; i < 8 && !priv; i++) { const p = Crypto.getRandomBytes(32); try { identityFromPriv(p); priv = p; } catch { /* invalid scalar */ } }
+    if (!priv) throw new Error("could not make a ticket key");
+    const t = identityFromPriv(priv);
+    await this.append(room, "memberInvite", { ticket: t.address, role: "admin" });
+    const link = shareUriFor(room.meta.secretHex) + "&inv=" + hex(priv);
+    this.inviteLinks[h] = link; this.emit();
+    return link;
+  }
+  revokeInvite(h: string, ticket: string) { const r = this.byHash.get(h); return r ? this.append(r, "memberInvite", { ticket, role: "revoke" }) : Promise.resolve(); }
+  pendingInvites(h: string): string[] { return Object.keys(this.state(h).invites || {}); }
+
   private async doJoinRoom(room: Room): Promise<string> {
+    await this.bindIdentity(room);   // before registering: a failed bind leaves no half-joined room
     await this.hydrate(room);   // restore any prior local log for this room
     this.rooms.set(room.topic, room); this.byHash.set(room.meta.topicHash, room);
     await this.saveRegistry();
     if (this.started) { await transport.join([room.topic]); this.syncRoom(room); }
-    if (this.myName) await this.append(room, "profileSet", { name: this.myName });
+    if (this.myName) await this.append(room, "profileSet", { name: this.myName }).catch(() => {});
     this.emit();
     return room.meta.topicHash;
   }
@@ -450,11 +547,12 @@ export class Sessions {
   async setName(name: string) {
     this.myName = name;
     try { await SecureStore.setItemAsync("qaku-myname", name); } catch { /* */ }
-    for (const room of this.rooms.values()) await this.append(room, "profileSet", { name });
+    // One room failing to sign (its Loam identity locked) must not stop the others.
+    for (const room of this.rooms.values()) await this.append(room, "profileSet", { name }).catch(() => {});
     this.emit();
   }
   async currentName(topicHash: string): Promise<string> {
-    const st = this.state(topicHash); return (st.names && st.names[this.myAddress]) || "";
+    const st = this.state(topicHash); return (st.names && st.names[this.addressIn(topicHash)]) || "";
   }
   // Persist the Core/Edge choice. The node reads mode only at start(), so a change
   // takes effect on the next app launch — the UI tells the user to relaunch.
@@ -473,7 +571,7 @@ export class Sessions {
 
   ask(h: string, content: string) { const r = this.byHash.get(h); return r ? this.append(r, "questionAdd", { questionId: rid(), content }) : Promise.resolve(); }
   upvote(h: string, targetId: string, up = true) { const r = this.byHash.get(h); return r ? this.append(r, "upvote", { targetId, up }) : Promise.resolve(); }
-  postAnswer(h: string, questionId: string, content: string) { const r = this.byHash.get(h); return r ? this.append(r, "answerPost", { answerId: rid(), questionId, content, author: this.myAddress }) : Promise.resolve(); }
+  postAnswer(h: string, questionId: string, content: string) { const r = this.byHash.get(h); return r ? this.append(r, "answerPost", { answerId: rid(), questionId, content, author: r.addr }) : Promise.resolve(); }
   acceptAnswer(h: string, questionId: string, answerId: string, accepted = true) { const r = this.byHash.get(h); return r ? this.append(r, "answerAccept", { questionId, answerId, accepted }) : Promise.resolve(); }
   moderate(h: string, questionId: string, hidden: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "moderate", { questionId, hidden }) : Promise.resolve(); }
   setOpen(h: string, enabled: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "sessionConfig", { enabled }) : Promise.resolve(); }
@@ -490,8 +588,11 @@ export class Sessions {
   setPollActive(h: string, pollId: string, active: boolean) { const r = this.byHash.get(h); return r ? this.append(r, "pollSetActive", { pollId, active }) : Promise.resolve(); }
   deletePoll(h: string, pollId: string) { const r = this.byHash.get(h); return r ? this.append(r, "pollDelete", { pollId }) : Promise.resolve(); }
   // One live vote per identity: a later vote replaces ours (engine LWW per author).
-  votePoll(h: string, pollId: string, optionId: string) { const r = this.byHash.get(h); return r ? this.append(r, "pollVote", { pollId, optionId, voter: this.myAddress }) : Promise.resolve(); }
-  isOwner(h: string): boolean { return this.state(h).owner === this.myAddress; }
+  votePoll(h: string, pollId: string, optionId: string) { const r = this.byHash.get(h); return r ? this.append(r, "pollVote", { pollId, optionId, voter: r.addr }) : Promise.resolve(); }
+  // Our author address in a room (its Loam identity, or the device key).
+  addressIn(h: string): string { return this.byHash.get(h)?.addr || this.myAddress; }
+  identityModeIn(h: string): "loam" | "device" { return this.byHash.get(h)?.meta.idMode === "loam" ? "loam" : "device"; }
+  isOwner(h: string): boolean { const r = this.byHash.get(h); return !!r && this.state(h).owner === r.addr; }
   ownerOf(h: string): string { return this.state(h).owner || ""; }
   adminsOf(h: string): string[] { return this.state(h).admins || []; }
   sessionOpen(h: string): boolean { const st = this.state(h); return !st.session || st.session.enabled !== false; }
@@ -500,19 +601,20 @@ export class Sessions {
   // Without this, computeState ran on every render (3s tick + every emit) for a big log,
   // which is the ongoing sluggishness.
   // Folded as this device's identity so each poll carries myVote (our live option or null).
+  // roomId = the topic hash: invite claims are bound to it (docs/adr/0001).
   private stateCache = new Map<string, { n: number; me: string; st: any }>();
   state(topicHash: string): any {
-    const r = this.byHash.get(topicHash); if (!r) return { questions: [], polls: [], names: {} };
+    const r = this.byHash.get(topicHash); if (!r) return { questions: [], polls: [], names: {}, invites: {} };
     const c = this.stateCache.get(topicHash);
-    if (c && c.n === r.log.length && c.me === this.myAddress) return c.st;
+    if (c && c.n === r.log.length && c.me === r.addr) return c.st;
     let st: any;
     // Never let one bad event take the screen down: keep the last good fold (or an empty one).
-    try { st = computeState(r.log, { me: this.myAddress }); } catch (e) { console.warn("qaku: fold failed", e); return c ? c.st : { questions: [], polls: [], names: {} }; }
-    this.stateCache.set(topicHash, { n: r.log.length, me: this.myAddress, st });
+    try { st = computeState(r.log, { me: r.addr, roomId: topicHash }); } catch (e) { console.warn("qaku: fold failed", e); return c ? c.st : { questions: [], polls: [], names: {}, invites: {} }; }
+    this.stateCache.set(topicHash, { n: r.log.length, me: r.addr, st });
     return st;
   }
   secretHex(topicHash: string): string { return this.byHash.get(topicHash)?.meta.secretHex || ""; }
-  isAdmin(topicHash: string): boolean { const st = this.state(topicHash); return !!(st.admins && st.admins.indexOf(this.myAddress) >= 0); }
+  isAdmin(topicHash: string): boolean { const st = this.state(topicHash); return !!(st.admins && st.admins.indexOf(this.addressIn(topicHash)) >= 0); }
   displayName(topicHash: string, addr: string): string { const st = this.state(topicHash); return (st.names && st.names[addr]) || shortAddr(addr); }
   // Cheap title (no fold) for the room header fallback — avoids computeState in render.
   metaTitle(topicHash: string): string { return this.byHash.get(topicHash)?.meta.title || ""; }
@@ -534,7 +636,7 @@ export class Sessions {
       const st = this.state(r.meta.topicHash);
       const qs = st.questions || [];
       const seen = this.seenTs.get(r.meta.topicHash) || 0;
-      return { topicHash: r.meta.topicHash, title: (st.session && st.session.title) || r.meta.title, questions: qs.length, owned: st.owner === this.myAddress, unread: qs.filter((q: any) => q.ts > seen).length };
+      return { topicHash: r.meta.topicHash, title: (st.session && st.session.title) || r.meta.title, questions: qs.length, owned: st.owner === r.addr, unread: qs.filter((q: any) => q.ts > seen).length };
     });
   }
 }

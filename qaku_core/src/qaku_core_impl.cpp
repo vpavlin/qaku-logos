@@ -45,17 +45,34 @@ static bool isHex64(const std::string& s){ if (s.size()!=64) return false; for (
 // URI carries everything a phone/peer needs to join and decrypt, exactly like the
 // original qaku's password-in-URL. Accept a raw 64-hex secret OR this URI.
 static const char* kShareScheme = "qaku://join?s=";
-static std::string stripShareUri(const std::string& in){
-    std::string s = in;
-    if (s.rfind("qaku://", 0) == 0) { auto p = s.find("s="); if (p != std::string::npos) s = s.substr(p + 2); }
-    return s;
+// A moderator invite link appends the one-time ticket key: qaku://join?s=<secret>&inv=<key>
+// (docs/adr/0001). Returns the secret; the ticket key (if any) goes to *inv.
+static std::string parseJoinLink(const std::string& in, std::string* inv) {
+    if (inv) inv->clear();
+    if (in.rfind("qaku://", 0) != 0) return in;
+    auto q = in.find('?');
+    std::string query = q == std::string::npos ? std::string() : in.substr(q + 1), secret;
+    size_t i = 0;
+    while (i <= query.size()) {
+        size_t amp = query.find('&', i); if (amp == std::string::npos) amp = query.size();
+        std::string kv = query.substr(i, amp - i);
+        auto eq = kv.find('=');
+        std::string k = kv.substr(0, eq), v = eq == std::string::npos ? std::string() : kv.substr(eq + 1);
+        if (k == "s") secret = v; else if (k == "inv" && inv) *inv = v;
+        i = amp + 1;
+    }
+    return secret;
 }
+static std::string stripShareUri(const std::string& in) { return parseJoinLink(in, nullptr); }
+// Loam calls (hdStatus / hdIdentity / hdSign) always carry an explicit deadline.
+static const int kLoamCallTimeoutMs = 15000;
+static const char* kAppId = "qaku";
 static std::string trim(const std::string& s){ size_t a=s.find_first_not_of(" \t\r\n"); if (a==std::string::npos) return ""; size_t b=s.find_last_not_of(" \t\r\n"); return s.substr(a, b-a+1); }
 static std::string lower(std::string s){ for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }
 
 // role of this device in a session's fold: "owner" | "admin" | "guest" | "new".
-static std::string roleFor(const std::vector<qaku::Event>& log, const std::string& dev) {
-    auto adm = qaku::admitEvents(log);
+static std::string roleFor(const std::vector<qaku::Event>& log, const std::string& dev, const std::string& roomId) {
+    auto adm = qaku::admitEvents(log, roomId);
     if (!adm.isSession) return "new";
     if (adm.owner == dev) return "owner";
     for (auto& a : adm.admins) if (a == dev) return "admin";
@@ -212,6 +229,8 @@ void QakuCoreImpl::loadSessions() {
                 applySecret(s, secret, false);        // derive identity/topic (key already on disk)
                 loadPersistedLog(s);
                 loadOnStream(s);
+                loadIdentity(s);                      // no identity.json = a session from before identities: device
+                loadOutbox(s);
             } catch (const std::exception& ex) {
                 // One unreadable session must not take the others (or the module) down.
                 fprintf(stderr, "QAKU loadSessions: skipping %s: %s\n", e.id.c_str(), ex.what());
@@ -242,7 +261,207 @@ void QakuCoreImpl::applySecret(Session& s, const qaku::Bytes& secret, bool persi
 qaku::HLC QakuCoreImpl::nextHlc(Session& s) {
     long long t = nowMs();
     if (t > s.wall) { s.wall = t; s.ctr = 0; } else { s.ctr += 1; }
-    return qaku::HLC{ s.wall, s.ctr, m_myAddress };   // author = our address (signEvent re-stamps it too)
+    return qaku::HLC{ s.wall, s.ctr, addrOf(s) };   // author = our address in s (re-stamped when signed)
+}
+
+// ---------------------------------------------------------------------------
+// Identities (docs/adr/0001): a Loam identity per room, else the device key
+// ---------------------------------------------------------------------------
+std::string QakuCoreImpl::roomIdOf(const Session& s) const {
+    // "/qaku/1/<32-hex>/proto" -> the hash: same on every device of every member (derived from
+    // the secret), known before anything has synced.
+    if (!s.haveKey) return "";
+    const std::string pre = "/qaku/1/";
+    if (s.topic.rfind(pre, 0) != 0) return "";
+    auto end = s.topic.find('/', pre.size());
+    return s.topic.substr(pre.size(), end == std::string::npos ? std::string::npos : end - pre.size());
+}
+std::string QakuCoreImpl::addrOf(const Session& s) const {
+    if (s.idMode == "loam") return s.idAddress;
+    if (s.idMode == "device") return m_myAddress;
+    return "";   // deciding
+}
+json QakuCoreImpl::foldOf(const Session& s) const { return qaku::computeState(s.log, addrOf(s), roomIdOf(s)); }
+
+void QakuCoreImpl::onLoop(std::function<void()> fn) {
+    // Async-call callbacks may arrive off the event-loop thread; module work (and further module
+    // calls) happens on it. m_hubTimer lives on that thread.
+    if (m_hubTimer) QTimer::singleShot(0, m_hubTimer, std::move(fn));
+    else QTimer::singleShot(0, std::move(fn));
+}
+
+void QakuCoreImpl::saveIdentity(Session& s) {
+    if (s.dir.empty() || s.idMode.empty()) return;
+    std::ofstream f(s.dir + "/identity.json", std::ios::trunc);
+    if (f) f << json({{"mode", s.idMode}, {"address", s.idAddress}, {"pub", s.idPub}}).dump();
+}
+void QakuCoreImpl::loadIdentity(Session& s) {
+    // No identity.json: a session from before identities = the device key; the untouched default
+    // slot (fresh) has authored nothing yet, so it is decided when first used.
+    s.idMode = s.fresh ? "" : "device";
+    if (s.dir.empty()) return;
+    std::ifstream f(s.dir + "/identity.json");
+    if (!f) return;
+    try {
+        std::stringstream ss; ss << f.rdbuf();
+        json j = json::parse(ss.str());
+        std::string m = qaku::jstr(j, "mode");
+        if (m == "loam") { s.idMode = "loam"; s.idAddress = qaku::jstr(j, "address"); s.idPub = qaku::jstr(j, "pub"); }
+    } catch (const std::exception&) { /* corrupt = device (what it was before identities) */ }
+}
+void QakuCoreImpl::saveOutbox(Session& s) {
+    if (s.dir.empty()) return;
+    std::string p = s.dir + "/outbox.json";
+    if (s.outbox.empty()) { std::remove(p.c_str()); return; }
+    json a = json::array();
+    for (const auto& e : s.outbox) a.push_back(qaku::eventToJson(e));
+    json keys = json::object();
+    for (const auto& kv : s.claimKeys) keys[kv.first] = kv.second;
+    std::ofstream f(p, std::ios::trunc);
+    if (f) f << json({{"events", a}, {"claimKeys", keys}}).dump();
+}
+void QakuCoreImpl::loadOutbox(Session& s) {
+    s.outbox.clear(); s.claimKeys.clear();
+    if (s.dir.empty()) return;
+    std::ifstream f(s.dir + "/outbox.json");
+    if (!f) return;
+    try {
+        std::stringstream ss; ss << f.rdbuf();
+        json j = json::parse(ss.str());
+        if (j.contains("events") && j["events"].is_array()) for (const auto& e : j["events"]) s.outbox.push_back(qaku::eventFromJson(e));
+        if (j.contains("claimKeys") && j["claimKeys"].is_object())
+            for (auto it = j["claimKeys"].begin(); it != j["claimKeys"].end(); ++it) if (it->is_string()) s.claimKeys[it.key()] = it->get<std::string>();
+    } catch (const std::exception&) { s.outbox.clear(); s.claimKeys.clear(); }
+}
+
+// Fill in what depends on the author address, right before signing: the legacy `voter` field
+// and an invite claim's ticket proof (bound to this room + this member).
+void QakuCoreImpl::finalizeForAuthor(Session& s, Event& e, const std::string& addr) {
+    if (e.payload.is_object() && e.payload.contains("voter")) e.payload["voter"] = addr;
+    if (e.type == qaku::T::MEMBER_CLAIM) {
+        auto it = s.claimKeys.find(e.id);
+        if (it != s.claimKeys.end()) {
+            qaku::InviteClaim c = qaku::signInviteClaim(qaku::fromHex(it->second), roomIdOf(s), addr);
+            if (c.ok) e.payload = {{"ticket", c.ticket}, {"ticketPub", c.ticketPub}, {"member", addr}, {"ticketSig", c.ticketSig}};
+        }
+    }
+}
+
+// Ask loam_core whether there is an HD root (async, explicit deadline). The answer decides the
+// identity of sessions created/joined meanwhile (idMode "") and re-pumps every outbox.
+void QakuCoreImpl::queryHdStatus() {
+    if (m_hdQuerying) return;
+    m_hdQuerying = true;
+    modules().loam_core.hdStatusAsyncResult([this](logos::AsyncResult<std::string> r) {
+        onLoop([this, r] {
+            std::lock_guard<std::recursive_mutex> lk(m_mtx);
+            m_hdQuerying = false;
+            json j = r.ok() ? json::parse(r.value, nullptr, false) : json();
+            if (r.ok() && j.is_object() && !j.contains("error")) {
+                m_hdKnown = true; m_hdFailures = 0;
+                m_hdExists = qaku::jbool(j, "exists", false);
+            } else if (++m_hdFailures >= 3) {
+                // loam_core too old for identities (no hdStatus) or not answering at all: no Loam root.
+                m_hdKnown = true; m_hdExists = false;
+                fprintf(stderr, "QAKU hdStatus failed %d times (%s): using the device key for new sessions\n",
+                        m_hdFailures, r.ok() ? r.value.c_str() : r.error.code.c_str());
+            }
+            pumpAllIdentities();
+            publishState();
+        });
+    }, kLoamCallTimeoutMs);
+}
+
+void QakuCoreImpl::pumpAllIdentities() {
+    std::vector<std::string> ids;
+    for (auto& kv : m_sessions) ids.push_back(kv.first);
+    for (auto& id : ids) pumpIdentity(id);
+}
+
+// Move one session's identity forward: decide (new session) -> resolve the Loam address ->
+// sign the outbox one event at a time. Every step is an async loam_core call with a deadline;
+// failures leave the events queued with the reason in idError (retried on the 15 s tick).
+// A Loam-bound session NEVER falls back to the device key (that would link it to the others).
+void QakuCoreImpl::pumpIdentity(const std::string& sessionId) {
+    auto it = m_sessions.find(sessionId);
+    if (it == m_sessions.end()) return;
+    Session& s = it->second;
+    if (s.idMode.empty()) {
+        if (s.outbox.empty()) return;                 // nothing to author yet - decide when needed
+        if (!m_hdKnown) { queryHdStatus(); return; }
+        s.idMode = m_hdExists ? "loam" : "device";
+        saveIdentity(s);
+    }
+    if (s.idMode == "device") {
+        std::vector<Event> out; out.swap(s.outbox);
+        for (auto& e : out) {
+            finalizeForAuthor(s, e, m_myAddress);
+            if (m_signId.valid) qaku::signEvent(m_signId, e);
+            commitOwn(s, e);
+        }
+        s.claimKeys.clear(); saveOutbox(s);
+        return;
+    }
+    // loam
+    if (s.signing || (s.outbox.empty() && !s.idAddress.empty())) return;
+    const std::string room = roomIdOf(s);
+    if (room.empty()) return;
+    s.signing = true;
+    if (s.idAddress.empty()) {
+        modules().loam_core.hdIdentityAsyncResult(kAppId, room, [this, sessionId](logos::AsyncResult<std::string> r) {
+            onLoop([this, sessionId, r] {
+                std::lock_guard<std::recursive_mutex> lk(m_mtx);
+                auto it = m_sessions.find(sessionId); if (it == m_sessions.end()) return;
+                Session& s = it->second;
+                s.signing = false;
+                json j = r.ok() ? json::parse(r.value, nullptr, false) : json();
+                std::string a = j.is_object() ? qaku::jstr(j, "address") : std::string();
+                if (r.ok() && a.size() == 42 && a.rfind("0x", 0) == 0 && qaku::isLowerHex(a.substr(2), 40)) {
+                    s.idAddress = a; s.idPub = qaku::jstr(j, "pubHex"); s.idError.clear();
+                    saveIdentity(s);
+                    pumpIdentity(sessionId);
+                } else {
+                    std::string why = !r.ok() ? ("Loam did not answer (" + r.error.code + ")") : (j.is_object() ? qaku::jstr(j, "error") : "bad answer");
+                    s.idError = "Waiting for your Loam identity: " + (why.empty() ? std::string("bad answer") : why) + (why == "locked" ? " - unlock it in Loam" : "");
+                }
+                publishState();
+            });
+        }, kLoamCallTimeoutMs);
+        return;
+    }
+    Event e = s.outbox.front();
+    finalizeForAuthor(s, e, s.idAddress);
+    qaku::stampAuthor(e, s.idAddress);
+    const std::string digest = qaku::eventDigestHex(e);
+    modules().loam_core.hdSignAsyncResult(kAppId, room, digest, [this, sessionId, e](logos::AsyncResult<std::string> r) mutable {
+        onLoop([this, sessionId, e, r]() mutable {
+            std::lock_guard<std::recursive_mutex> lk(m_mtx);
+            auto it = m_sessions.find(sessionId); if (it == m_sessions.end()) return;
+            Session& s = it->second;
+            s.signing = false;
+            json j = r.ok() ? json::parse(r.value, nullptr, false) : json();
+            std::string err = !r.ok() ? ("Loam did not answer (" + r.error.code + ")") : (!j.is_object() ? "bad answer" : qaku::jstr(j, "error"));
+            if (err.empty()) {
+                if (qaku::jstr(j, "address") != s.idAddress) err = "Loam answered with another identity";
+                else {
+                    e.pub = lower(qaku::jstr(j, "pub")); e.sig = lower(qaku::jstr(j, "sig"));
+                    if (!qaku::verifyEvent(e)) err = "Loam's signature did not verify";
+                }
+            }
+            if (!err.empty()) {
+                s.idError = "Waiting for your Loam identity: " + err + (err == "locked" ? " - unlock it in Loam" : "");
+                publishState();
+                return;
+            }
+            // Signed: it leaves the outbox and becomes an ordinary event of ours.
+            if (!s.outbox.empty() && s.outbox.front().id == e.id) s.outbox.erase(s.outbox.begin());
+            s.claimKeys.erase(e.id);
+            saveOutbox(s);
+            s.idError.clear();
+            commitOwn(s, e);
+            pumpIdentity(sessionId);
+        });
+    }, kLoamCallTimeoutMs);
 }
 
 void QakuCoreImpl::onContextReady() {
@@ -251,8 +470,14 @@ void QakuCoreImpl::onContextReady() {
     // Device id: env QAKU_DEVICE_ID (hub/tests) > persisted device.txt > the
     // default. Persisted so a setDeviceId rename survives restart. Env wins on
     // every launch when set.
+    // No env + nothing persisted (or the old shared default) -> mint a unique id and persist it:
+    // every install sharing "qaku-core" made peers drop each other's catch-up as self-echo.
     if (const char* d = std::getenv("QAKU_DEVICE_ID")) m_deviceId = d;
-    else if (!m_dataDir.empty()) { std::string p = qaku::persist::readDeviceId(m_dataDir); if (!p.empty()) m_deviceId = p; }
+    else {
+        std::string p = qaku::persist::readDeviceId(m_dataDir);
+        if (p.empty() || p == "qaku-core") { p = qaku::persist::newDeviceId(); qaku::persist::writeDeviceId(m_dataDir, p); }
+        m_deviceId = p;
+    }
     loadOrCreateSignKey();   // our secp256k1 author identity (m_myAddress) — before any fold/authoring
     if (!m_dataDir.empty()) { std::ifstream nf(m_dataDir + "/myname.txt"); if (nf) { std::getline(nf, m_myName); m_myName = qaku::utf8Clip(m_myName, qaku::NAME_MAX_CP); } }   // older builds cut at 40 BYTES: drop a split trailing char
     // Load persisted sessions (registry + each pair.key + log.json), or create a
@@ -262,7 +487,9 @@ void QakuCoreImpl::onContextReady() {
     setStatus("Ready");
     loadOverlayConfig();
     applyOverlayConfig();   // no-op unless the user enabled it; default is OFF
-    bootstrapDelivery();
+    // Logos 0.3.x rejects calls a module makes while it is still loading ("auth token not
+    // recognized"), so module calls start once loading has finished (cf. scala startModules()).
+    QTimer::singleShot(1000, [this] { bootstrapDelivery(); });
     // Periodic sync for EVERY client (not just hubs): an RBSR catch-up round so a peer that
     // missed live traffic reconciles the EXACT delta with whoever is online — the recovery path
     // a plain client (Basecamp) never had (it only seeded on connect and re-served on request).
@@ -271,6 +498,10 @@ void QakuCoreImpl::onContextReady() {
     m_hubTimer = new QTimer();
     QObject::connect(m_hubTimer, &QTimer::timeout, [this]{
         std::lock_guard<std::recursive_mutex> lk(m_mtx);
+        // Retry identities that are waiting on Loam (locked root, no answer yet).
+        bool waiting = false;
+        for (auto& kv : m_sessions) if (!kv.second.outbox.empty() || (kv.second.idMode == "loam" && kv.second.idAddress.empty())) waiting = true;
+        if (waiting) { if (!m_hdKnown) queryHdStatus(); pumpAllIdentities(); }
         if (!m_nodeReady) { if (std::getenv("QAKU_HUB")) bootstrapDelivery(); return; }
         catchupRound();
     });
@@ -336,10 +567,25 @@ std::string QakuCoreImpl::shareQr() {
 void QakuCoreImpl::setStatus(const std::string& s) { m_status = s; emit statusChanged(s); }
 
 void QakuCoreImpl::pushEvent(Session& s, Event e, bool broadcast) {
-    // Sign our OWN events (broadcast) so they carry a verifiable secp256k1 author address
-    // (parity with mobile). Received events (broadcast=false) keep their original signature.
-    if (broadcast && m_signId.valid) qaku::signEvent(m_signId, e);
-    if (!broadcast) {
+    // Our OWN events (broadcast) are signed by the session's identity (docs/adr/0001) so they carry
+    // a verifiable secp256k1 author address. Device key: signed now. Loam (or still deciding): the
+    // event waits in the session's outbox until loam_core has signed it (async, never blocking).
+    // Received events (broadcast=false) keep their original signature.
+    if (broadcast) {
+        if (s.idMode == "device" && s.outbox.empty()) {
+            finalizeForAuthor(s, e, m_myAddress);
+            s.claimKeys.erase(e.id);
+            if (m_signId.valid) qaku::signEvent(m_signId, e);
+            commitOwn(s, e);
+        } else {
+            s.outbox.push_back(e);
+            saveOutbox(s);
+            pumpIdentity(s.id);
+            publishState();
+        }
+        return;
+    }
+    {
         // RECEIVE path (a catch-up round can deliver hundreds of events back to back): no
         // disk read, no re-sort of the whole log, no fold per event. Insert in HLC order and
         // let one debounced flush (~200 ms) persist + publishState for the whole burst.
@@ -352,6 +598,10 @@ void QakuCoreImpl::pushEvent(Session& s, Event e, bool broadcast) {
         scheduleFlush(s);
         return;
     }
+}
+
+// Append + persist + send one of OUR events, already signed.
+void QakuCoreImpl::commitOwn(Session& s, const Event& e) {
     // Merge any on-disk events written by a concurrent instance BEFORE appending
     // (see loadPersistedLog) so this write can't clobber theirs. No-op if not
     // persisting or nothing new on disk.
@@ -590,7 +840,7 @@ void QakuCoreImpl::publishState() {
     try {
     // Current session detail (the main pane renders these top-level fields). Folded as
     // this device's identity so each poll carries myVote (our live optionId, or null).
-    json s = qaku::computeState(cur().log, m_myAddress);
+    json s = foldOf(cur());   // as our address in this session (docs/adr/0001): myVote + invites
     // Tag each question with its local send state so the view can show a "queued" badge on
     // our own not-yet-published questions (evId = the source event id; see qaku_engine).
     if (s.contains("questions") && s["questions"].is_array())
@@ -606,11 +856,17 @@ void QakuCoreImpl::publishState() {
     s["secret"] = cur().haveKey ? hex(cur().identity.secret) : "";
     // The full shareable URI (secret-in-URL, like the original qaku's password-in-URL).
     s["shareUri"] = cur().haveKey ? (std::string(kShareScheme) + hex(cur().identity.secret)) : "";
-    s["deviceId"] = m_myAddress;   // the copyable IDENTITY is now our signing address (for admin lists)
-    s["address"] = m_myAddress;
+    // The copyable IDENTITY is our signing address IN THIS SESSION (for admin lists): its Loam
+    // identity, or the device key ("" while a new session's identity is being resolved).
+    s["deviceId"] = addrOf(cur());
+    s["address"] = addrOf(cur());
+    s["identity"] = { {"mode", cur().idMode.empty() ? std::string("pending") : cur().idMode}, {"address", addrOf(cur())},
+                      {"waiting", (json::number_integer_t)cur().outbox.size()}, {"error", cur().idError},
+                      {"deviceAddress", m_myAddress} };
+    s["inviteLink"] = cur().inviteLink;
     s["myName"] = m_myName;
     s["currentId"] = m_current;
-    s["role"] = roleFor(cur().log, m_myAddress);
+    s["role"] = roleFor(cur().log, addrOf(cur()), roomIdOf(cur()));
     // Transport diagnostics: the content topic we publish/subscribe on, and the
     // autoshard the fleet routes it to. Mobile shows the SAME two for its session;
     // if the shard differs the two nodes are on different pubsub topics and can
@@ -623,7 +879,7 @@ void QakuCoreImpl::publishState() {
     for (const auto& id : m_order) {
         auto it = m_sessions.find(id); if (it == m_sessions.end()) continue;
         const Session& e = it->second;
-        if (e.log.empty()) continue;
+        if (e.log.empty() && e.outbox.empty()) continue;
         json cs;
         try { cs = qaku::computeState(e.log); } catch (const std::exception&) { cs = json::object(); }   // one bad session must not hide the list
         std::string title;
@@ -633,7 +889,7 @@ void QakuCoreImpl::publishState() {
             {"id", e.id},
             {"title", title.empty() ? std::string("Untitled Q&A") : title},
             {"fingerprint", e.fingerprint},
-            {"role", roleFor(e.log, m_myAddress)},
+            {"role", roleFor(e.log, addrOf(e), roomIdOf(e))},
             {"questions", qaku::jget<json::number_integer_t>(cs, "questionCount", 0)},
             {"open", open},
             {"unread", 0},
@@ -681,9 +937,10 @@ std::string QakuCoreImpl::resync() {
 
 // --- admission helper: is this device owner/admin in the CURRENT session? ---
 std::string QakuCoreImpl::adminGuard() {
-    json s = qaku::computeState(cur().log);
+    json s = foldOf(cur());
     if (!s.value("isSession", false)) return "";
-    for (auto& a : s["admins"]) if (a == m_myAddress) return "";
+    const std::string me = addrOf(cur());
+    for (auto& a : s["admins"]) if (!me.empty() && a == me) return "";
     return "{\"error\":\"not an owner/admin\"}";
 }
 
@@ -703,7 +960,7 @@ std::string QakuCoreImpl::createSession(std::string title, std::string descripti
     // secret, never joined/created). A joined-but-not-yet-synced room also has a key and an
     // empty log - reusing that wrote our session.create into someone else's Q&A. Otherwise
     // mint a NEW session with a fresh secret and switch to it.
-    if (m_sessions.empty() || !cur().haveKey || !cur().fresh || !cur().log.empty()) newSessionEntry();
+    if (m_sessions.empty() || !cur().haveKey || !cur().fresh || !cur().log.empty() || !cur().outbox.empty() || !cur().idMode.empty()) newSessionEntry();
     cur().fresh = false;
     if (title.empty()) title = "Untitled Q&A";
     Event e = mkEvent(qaku::T::SESSION_CREATE, nextHlc(cur()), {{"sessionId", cur().fingerprint}, {"title", title}, {"description", description}});
@@ -729,20 +986,33 @@ std::string QakuCoreImpl::setName(std::string name) {
 std::string QakuCoreImpl::joinSession(std::string secretHex) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
     // Accept a raw 64-hex secret OR a qaku://join?s=<hex> URI (from a scanned QR).
-    std::string code = lower(trim(stripShareUri(trim(secretHex))));
+    std::string inv;
+    std::string code = lower(trim(parseJoinLink(trim(secretHex), &inv)));
+    inv = lower(trim(inv));
     if (!isHex64(code)) return "{\"error\":\"secret must be 64 hex characters\"}";
+    if (!inv.empty() && !isHex64(inv)) return "{\"error\":\"this invite link is damaged (bad inv=)\"}";
+    if (!inv.empty() && !qaku::identityFromPriv(qaku::fromHex(inv)).valid) return "{\"error\":\"this invite link is damaged (bad ticket key)\"}";
+    // Redeem a moderator invite (docs/adr/0001) as OUR identity in the joined session: the claim is
+    // queued like any of our events and its ticket proof is made once the author is known.
+    auto claim = [this, &inv](Session& s) {
+        if (inv.empty()) return;
+        Event c = mkEvent(qaku::T::MEMBER_CLAIM, nextHlc(s), json::object());
+        s.claimKeys[c.id] = inv;
+        pushEvent(s, c, true);
+    };
     qaku::Bytes s = fromHex(code);
     std::string topic;
     try { topic = qaku::topicFor(qaku::deriveIdentity(s)); } catch (...) { return "{\"error\":\"invalid secret\"}"; }
     // Already hold this session? Switch instead of duplicating.
-    for (auto& kv : m_sessions) if (kv.second.haveKey && kv.second.topic == topic) { m_current = kv.first; saveSessions(); return snapshot(); }
+    for (auto& kv : m_sessions) if (kv.second.haveKey && kv.second.topic == topic) { m_current = kv.first; claim(kv.second); saveSessions(); return snapshot(); }
     // Reuse the current slot only if it is the untouched default (see createSession) - never
     // a joined/created one, whose pair.key this would overwrite. Else a fresh entry.
-    Session* target = (!m_sessions.empty() && cur().fresh && cur().log.empty()) ? &cur() : &newSessionEntry();
+    Session* target = (!m_sessions.empty() && cur().fresh && cur().log.empty() && cur().outbox.empty() && cur().idMode.empty()) ? &cur() : &newSessionEntry();
     applySecret(*target, s, true);   // writes the joined session's pair.key
     target->fresh = false;
     m_current = target->id;
     emitProfileSet(*target);   // announce our display name on the joined topic
+    claim(*target);
     saveSessions();
     return snapshot();
 }
@@ -782,6 +1052,25 @@ std::string QakuCoreImpl::addAdmin(std::string memberId, std::string name) {
 std::string QakuCoreImpl::removeAdmin(std::string memberId) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;
     pushEvent(cur(), mkEvent(qaku::T::ADMIN_REMOVE, nextHlc(cur()), {{"memberId", memberId}}), true); return snapshot();
+}
+// A one-time moderator invite (docs/adr/0001): a fresh ticket key goes into the link (returned as
+// snapshot().inviteLink), its address
+// into a member.invite. Whoever opens the link first becomes an admin (the fold checks the claim).
+std::string QakuCoreImpl::createInvite() {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;
+    if (!cur().haveKey) return "{\"error\":\"no session key\"}";
+    qaku::SignId t = qaku::generateIdentity();
+    if (!t.valid) return "{\"error\":\"could not make a ticket key\"}";
+    pushEvent(cur(), mkEvent(qaku::T::MEMBER_INVITE, nextHlc(cur()), {{"ticket", t.address}, {"role", "admin"}}), true);
+    cur().inviteLink = std::string(kShareScheme) + hex(cur().identity.secret) + "&inv=" + hex(t.priv);
+    return snapshot();   // the link is in snapshot().inviteLink (shown once, never persisted)
+}
+std::string QakuCoreImpl::revokeInvite(std::string ticket) {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx); std::string g = adminGuard(); if (!g.empty()) return g;
+    ticket = lower(trim(ticket));
+    if (ticket.empty()) return "{\"error\":\"ticket required\"}";
+    pushEvent(cur(), mkEvent(qaku::T::MEMBER_INVITE, nextHlc(cur()), {{"ticket", ticket}, {"role", "revoke"}}), true);
+    return snapshot();
 }
 
 // --- questions ---

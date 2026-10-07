@@ -266,7 +266,8 @@ function AppInner() {
   const allQ = st.questions || [];
   const names = st.names || {};
   const nameOf = (a: string) => names[a] || shortAddr(a);
-  const admin = (st.admins || []).indexOf(sessions.myAddress) >= 0;
+  const me = sessions.addressIn(openHash);              // our author address in THIS room (docs/adr/0001)
+  const admin = (st.admins || []).indexOf(me) >= 0;
   const answeredOf = (x: any) => (x.answers && x.answers.length > 0) || !!x.acceptedAnswerId;
   const visibleQ = allQ.filter((x: any) => !x.moderated);
   const filteredQ = filterBy === "unanswered" ? visibleQ.filter((x: any) => !answeredOf(x))
@@ -292,7 +293,7 @@ function AppInner() {
           <Text style={s.bylineName} numberOfLines={1}>{nameOf(qq.author)}</Text>
           {qq.verified ? <Text style={s.verified}>✓</Text> : null}
           <Text style={s.time} numberOfLines={1}>· {timeAgo(qq.ts)}</Text>
-          {qq.author === sessions.myAddress ? (
+          {qq.author === me ? (
             sessions.isPublished(qq.evId)
               ? <Text style={s.pubOk} numberOfLines={1}>· ✓ published</Text>
               : <Text style={s.pubPending} numberOfLines={1}>· ⏳ queued</Text>
@@ -398,7 +399,8 @@ function AppInner() {
       {sessions.isStarred(openHash) ? <TouchableOpacity onPress={() => notifyQuestion(openHash!, "Test notification", "If you can see this, notifications work ✓")}><Text style={s.starHint}>★ Kept live in the background · tap to send a test notification</Text></TouchableOpacity> : null}
       {sessions.syncing ? <Text style={s.syncingHint}>⟳  Syncing this Q&A… questions may still be arriving</Text> : null}
       {sessions.unpublishedIn(openHash) > 0 ? <Text style={s.queuedHint}>⏳ {sessions.unpublishedIn(openHash)} not yet published — retrying until they reach the network</Text> : null}
-      {(sessions.myName || names[sessions.myAddress]) ? null : <TouchableOpacity onPress={() => { setNameText(sessions.myName); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
+      {sessions.identityError ? <TouchableOpacity onPress={() => { sessions.identityError = ""; force(); }}><Text style={s.idError}>⚠ {sessions.identityError}  (tap to dismiss)</Text></TouchableOpacity> : null}
+      {(sessions.myName || names[me]) ? null : <TouchableOpacity onPress={() => { setNameText(sessions.myName); setNameModal(true); }}><Text style={s.setNameHint}>Set a display name so people know who you are →</Text></TouchableOpacity>}
       {admin ? (
         <View style={s.adminBar}>
           <TouchableOpacity style={[s.adminChip, !sessions.sessionOpen(openHash) && s.adminChipClosed]} onPress={() => sessions.setOpen(openHash!, !sessions.sessionOpen(openHash!)).catch(() => {})}>
@@ -547,13 +549,17 @@ function renderAdminModal(open: boolean, setOpen: (v: boolean) => void, hash: st
   const isOwner = sessions.isOwner(hash);
   const admins = sessions.adminsOf(hash).filter((a) => a !== owner);
   const add = () => { const v = input.trim(); if (v) { sessions.addAdmin(hash, v).catch(() => {}); setInput(""); } };
+  const me = sessions.addressIn(hash);
+  const invites = sessions.pendingInvites(hash);
+  const link = sessions.inviteLinks[hash] || "";
   return (
     <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
       <View style={s.modalWrap}><View style={s.modalCard}>
         <Text style={s.modalTitle}>Admins</Text>
-        <Text style={s.modalHint}>Admins can answer, moderate, open/close, and run polls. Add someone by their identity address (from their name screen), or a Basecamp's device id.</Text>
-        <Text style={s.addrLabel}>Your address{isOwner ? "  (owner)" : ""}</Text>
-        <TouchableOpacity onPress={() => copy(sessions.myAddress, "Address copied")}><Text style={s.addrVal} selectable>{sessions.myAddress}  ⧉</Text></TouchableOpacity>
+        <Text style={s.modalHint}>Admins can answer, moderate, open/close, and run polls. Send someone a one-time invite link, or add them by their address in this Q&A.</Text>
+        <Text style={s.addrLabel}>Your address in this Q&A{isOwner ? "  (owner)" : ""}</Text>
+        <TouchableOpacity onPress={() => copy(me, "Address copied")}><Text style={s.addrVal} selectable>{me}  ⧉</Text></TouchableOpacity>
+        <Text style={s.idMode}>{sessions.identityModeIn(hash) === "loam" ? "Loam identity for this Q&A only — not linkable to your other Q&As" : "This device's key (no Loam identity) — the same in every Q&A on this phone"}</Text>
         <View style={s.divider} />
         <Text style={s.addrLabel}>Owner</Text>
         <Text style={s.addrVal} numberOfLines={1}>{shortAddr(owner)}</Text>
@@ -565,7 +571,19 @@ function renderAdminModal(open: boolean, setOpen: (v: boolean) => void, hash: st
           </View>
         ))}
         <View style={s.divider} />
-        <Text style={s.addrLabel}>Add admin</Text>
+        <Text style={s.addrLabel}>Invite a moderator</Text>
+        <Text style={s.modalHint}>A one-time link: whoever opens it first becomes an admin. Share it privately.</Text>
+        <TouchableOpacity style={[s.btnPrimary, { marginTop: 6 }]} onPress={() => { sessions.createInvite(hash).then((l) => copy(l, "Invite link copied")).catch(() => {}); }}><Text style={s.btnPrimaryT}>New invite link</Text></TouchableOpacity>
+        {link ? <TouchableOpacity onPress={() => copy(link, "Invite link copied")}><Text style={s.addrVal} selectable numberOfLines={2}>{link}  ⧉</Text></TouchableOpacity> : null}
+        {invites.length ? <Text style={[s.addrLabel, { marginTop: 10 }]}>Unused invites</Text> : null}
+        {invites.map((t) => (
+          <View key={t} style={s.adminRowM}>
+            <Text style={[s.addrVal, { flex: 1 }]} numberOfLines={1}>ticket {shortAddr(t)}</Text>
+            <TouchableOpacity onPress={() => sessions.revokeInvite(hash, t).catch(() => {})}><Text style={s.removeT}>Revoke</Text></TouchableOpacity>
+          </View>
+        ))}
+        <View style={s.divider} />
+        <Text style={s.addrLabel}>Add admin by address</Text>
         <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
           <TextInput style={[s.modalInput, { flex: 1 }]} placeholder="0x… address or device id" placeholderTextColor={C.muted} value={input} onChangeText={setInput} autoCapitalize="none" autoCorrect={false} />
           <TouchableOpacity style={s.btnPrimary} onPress={add}><Text style={s.btnPrimaryT}>Add</Text></TouchableOpacity>
@@ -663,6 +681,8 @@ const s = StyleSheet.create({
   unreadBadgeT: { color: C.primaryFg, fontSize: 12, fontWeight: "800" },
   syncingHint: { color: C.primary, fontSize: 12, marginBottom: 8 },
   queuedHint: { color: C.primary, fontSize: 12, marginBottom: 8, fontWeight: "700" },
+  idError: { color: C.danger, fontSize: 12, marginBottom: 8, fontWeight: "700" },
+  idMode: { color: C.muted, fontSize: 11, marginTop: 4 },
   sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
   syncingSmall: { color: C.primary, fontSize: 11 },
   roomTitle: { color: C.text, fontSize: 16, fontWeight: "700" },

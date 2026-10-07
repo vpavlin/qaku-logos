@@ -12,6 +12,9 @@ export const EventType = {
   SESSION_CONFIG: "session.config",   // LWW-by-HLC per field (title/desc/enabled/moderation)
   ADMIN_ADD: "admin.add",             // owner/admin grants admin
   ADMIN_REMOVE: "admin.remove",       // owner/admin revokes admin (soft; owner is permanent)
+  // --- moderator invite tickets (qaku ADR 0001): no address needed up front ---
+  MEMBER_INVITE: "member.invite",     // { ticket, role:"admin"|"revoke" } — owner/admin offers admin to the ticket holder
+  MEMBER_CLAIM: "member.claim",       // { ticket, ticketPub, member, ticketSig } — redeem it (first valid claim wins)
 
   // --- profile: a participant's self-chosen display name, bound to their address ---
   PROFILE_SET: "profile.set",         // { name } — LWW-by-HLC per author; anyone sets their OWN
@@ -69,6 +72,15 @@ export const ev = {
     makeEvent(EventType.ADMIN_ADD, hlc, { memberId, name }, id),
   adminRemove: (hlc, { memberId }, id) =>
     makeEvent(EventType.ADMIN_REMOVE, hlc, { memberId }, id),
+
+  // Invite tickets (qaku ADR 0001). ticket = address of a one-time key that travels in the invite
+  // link; role "admin" offers admin, "revoke" withdraws a still-pending ticket.
+  memberInvite: (hlc, { ticket, role = "admin" }, id) =>
+    makeEvent(EventType.MEMBER_INVITE, hlc, { ticket, role }, id),
+  // member = the claimer's own address in this room (must equal the signed author);
+  // ticketSig = signInviteClaim(...) from identity.mjs.
+  memberClaim: (hlc, { ticket, ticketPub, member, ticketSig }, id) =>
+    makeEvent(EventType.MEMBER_CLAIM, hlc, { ticket, ticketPub, member, ticketSig }, id),
 
   // A display name for the author (hlc.dev = their address). LWW-by-HLC per author.
   profileSet: (hlc, { name }, id) =>

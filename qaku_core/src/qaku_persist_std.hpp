@@ -117,6 +117,14 @@ inline void writeDeviceId(const std::string& root, const std::string& id) {
     std::ofstream f(root + "/device.txt");
     if (f) f << id;
 }
+// A fresh, per-install transport id: "qaku-core-" + 12 random hex. The id is the SDS senderId and
+// the `from` of every catch-up frame, and a peer IGNORES catch-up frames whose `from` equals its own
+// (self-echo). With the old shared default "qaku-core" two desktops/hubs each took the other's frames
+// for their own echo and never caught up: a joiner saw only what was posted after it joined.
+inline std::string newDeviceId() {
+    Bytes r(6); RAND_bytes(r.data(), 6);
+    return "qaku-core-" + toHex(r.data(), r.size());
+}
 inline std::string readDeviceId(const std::string& root) {
     if (root.empty()) return "";
     std::ifstream f(root + "/device.txt");

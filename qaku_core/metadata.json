@@ -1,6 +1,6 @@
 {
   "name": "qaku_core",
-  "version": "0.1.22",
+  "version": "0.3.0",
   "type": "core",
   "interface": "universal",
   "category": "social",

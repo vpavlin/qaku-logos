@@ -19,6 +19,8 @@
 // event-type constants, Admission, and the whole Q&A fold below (ADR 0007/0010).
 #include "logos_sync/event.hpp"
 #include "logos_sync/merge.hpp"
+// verifyEvent / verifyInviteClaim: invite tickets are folded in admitEvents (qaku ADR 0001).
+#include "qaku_identity.hpp"
 
 namespace qaku {
 using json = nlohmann::json;
@@ -54,6 +56,8 @@ namespace T {
     constexpr const char* POLL_DELETE    = "poll.delete";
     constexpr const char* POLL_VOTE      = "poll.vote";
     constexpr const char* PROFILE_SET    = "profile.set";   // self-scoped display name (participant)
+    constexpr const char* MEMBER_INVITE  = "member.invite"; // {ticket,role} invite ticket (qaku ADR 0001), owner/admin
+    constexpr const char* MEMBER_CLAIM   = "member.claim";  // {ticket,ticketPub,member,ticketSig} redeem it, first valid wins
 }
 
 // ---- tolerant payload reads ------------------------------------------------
@@ -125,20 +129,48 @@ inline std::string pollResults(const json& p) {
 // mergeEvents / compareHlc are now logos_sync::mergeEvents / compareHlc (aliased
 // above) — union-by-id + HLC sort, idempotent, byte-identical to QAKU's original.
 
-struct Admission { std::vector<Event> admitted; std::string owner; std::vector<std::string> admins; bool isSession = false; };
+struct Admission { std::vector<Event> admitted; std::string owner; std::vector<std::string> admins; std::map<std::string, std::string> invites; bool isSession = false; };
 
 // Role admission (mirror of admitEvents). Owner = author of earliest
 // session.create; admins folded in HLC order gated by the current set; content
 // events owner/admin-gated; question edit/delete author-or-admin; participant
 // events open. Order-independent (folds the full set first).
-inline Admission admitEvents(const std::vector<Event>& evs) {
+// Invite tickets (qaku ADR 0001, mirror of engine.mjs): member.invite must be SIGNED by a current
+// owner/admin (role "admin" offers, "revoke" withdraws a pending ticket); member.claim must be
+// SIGNED by `member`, member != owner, the ticket pending, and ticketSig a low-S signature by
+// ticketPub over "qaku-invite-claim-v1|roomId|ticket|member". First valid claim in HLC order
+// wins; a redeemed ticket is final. roomId = the room's topic hash ("" = no claim verifies).
+inline Admission admitEvents(const std::vector<Event>& evs, const std::string& roomId = std::string()) {
     auto ordered = mergeEvents(evs);
     Admission A;
     for (const auto& e : ordered) if (e.type == T::SESSION_CREATE) { A.owner = e.hlc.dev; break; }
     A.isSession = !A.owner.empty();
     std::set<std::string> admins;
     if (!A.owner.empty()) admins.insert(A.owner);
+    std::map<std::string, std::string> invites;   // pending ticket -> offered role
+    std::set<std::string> claimed;                // redeemed tickets (one-time)
+    std::set<std::string> ticketEvents;           // invite/claim event ids that took effect
     for (const auto& e : ordered) {
+        if (e.type == T::MEMBER_INVITE || e.type == T::MEMBER_CLAIM) {
+            if (A.owner.empty() || e.sig.empty() || !verifyEvent(e)) continue;   // must be signed by its author
+            std::string t = jstr(e.payload, "ticket");
+            if (t.empty() || claimed.count(t)) continue;                        // a redeemed ticket is final
+            if (e.type == T::MEMBER_INVITE) {
+                if (!admins.count(e.hlc.dev)) continue;                         // only a current owner/admin
+                std::string r = jstr(e.payload, "role");
+                if (r == "revoke") { invites.erase(t); ticketEvents.insert(e.id); }
+                else if (r == "admin") { invites[t] = r; ticketEvents.insert(e.id); }
+            } else {
+                std::string m = jstr(e.payload, "member");
+                if (m.empty() || m != e.hlc.dev || m == A.owner || !invites.count(t)) continue;
+                if (!verifyInviteClaim(roomId, t, jstr(e.payload, "ticketPub"), m, jstr(e.payload, "ticketSig"))) continue;
+                admins.insert(m);
+                invites.erase(t);
+                claimed.insert(t);
+                ticketEvents.insert(e.id);
+            }
+            continue;
+        }
         if (e.type != T::ADMIN_ADD && e.type != T::ADMIN_REMOVE) continue;
         if (!admins.count(e.hlc.dev)) continue;
         std::string m = jstr(e.payload, "memberId");
@@ -162,6 +194,7 @@ inline Admission admitEvents(const std::vector<Event>& evs) {
         if (!A.isSession) { A.admitted.push_back(e); continue; }
         if (e.type == T::SESSION_CREATE) { A.admitted.push_back(e); continue; }
         if (e.type == T::ADMIN_ADD || e.type == T::ADMIN_REMOVE) { if (admins.count(author)) A.admitted.push_back(e); continue; }
+        if (e.type == T::MEMBER_INVITE || e.type == T::MEMBER_CLAIM) { if (ticketEvents.count(e.id)) A.admitted.push_back(e); continue; }
         if (isMod(e.type)) { if (admins.count(author)) A.admitted.push_back(e); continue; }
         if (e.type == T::QUESTION_EDIT || e.type == T::QUESTION_DELETE) {
             auto it = creatorOf.find(jstr(e.payload, "questionId"));
@@ -171,6 +204,7 @@ inline Admission admitEvents(const std::vector<Event>& evs) {
         if (e.type == T::QUESTION_ADD || e.type == T::UPVOTE || e.type == T::POLL_VOTE || e.type == T::PROFILE_SET) { A.admitted.push_back(e); continue; }
     }
     for (auto& a : admins) A.admins.push_back(a);
+    A.invites = invites;
     return A;
 }
 
@@ -179,8 +213,9 @@ inline Admission admitEvents(const std::vector<Event>& evs) {
 // answers:[...]}], polls:[{...,results,tally,votes,myVote}], counts}. Mirror of
 // computeState. `me` = the viewer's author address; only used for each poll's myVote
 // (that voter's live optionId, or null). Empty = no viewer (myVote always null).
-inline json computeState(const std::vector<Event>& evs, const std::string& me = std::string()) {
-    auto adm = admitEvents(evs);
+// roomId = the room's topic hash; invite claims are bound to it (qaku ADR 0001).
+inline json computeState(const std::vector<Event>& evs, const std::string& me = std::string(), const std::string& roomId = std::string()) {
+    auto adm = admitEvents(evs, roomId);
     const auto& ordered = adm.admitted;
 
     struct QV { std::string id, evId, content, author; long long ts=0; bool moderated=false; std::string accepted; bool deleted=false; };
@@ -295,8 +330,11 @@ inline json computeState(const std::vector<Event>& evs, const std::string& me = 
     }
     std::sort(ps.begin(), ps.end(), [](const json& x, const json& y){ long long xt=x["ts"],yt=y["ts"]; if (xt!=yt) return xt<yt; return x["id"]<y["id"]; });
 
+    json invites = json::object();
+    for (auto& kv : adm.invites) invites[kv.first] = kv.second;
+
     return json{
-        {"session", session}, {"owner", adm.owner}, {"admins", adm.admins}, {"isSession", adm.isSession},
+        {"session", session}, {"owner", adm.owner}, {"admins", adm.admins}, {"invites", invites}, {"isSession", adm.isSession},
         {"questions", qs}, {"polls", ps}, {"names", names},
         {"questionCount", qs.size()}, {"eventCount", (long long)ordered.size()},
     };

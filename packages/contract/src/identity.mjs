@@ -88,6 +88,55 @@ export function signEvent(identity, ev) {
   return ev;
 }
 
+// --- external signers (Loam, qaku ADR 0001) --------------------------------------------------
+// When the key lives in Loam (phone: loamSign over AIDL; desktop: loam_core.hdSign), signing is
+// split in two: stamp the author + compute the digest here, have Loam sign it, then attach.
+// Same bytes as signEvent: signEvent(id, ev) === attachSignature(prepareForSigning(ev, addr)...).
+export function stampAuthor(ev, address) {
+  ev.dev = address;
+  if (ev.hlc) ev.hlc.dev = address;
+  return ev;
+}
+/** sha256(canonicalMessage(ev)) as 64 lowercase hex — what an external signer signs. */
+export function eventDigestHex(ev) {
+  return hex(sha256(utf8Bytes(canonicalMessage(ev))));
+}
+/** Attach an externally made signature (64-byte r||s hex, low-S) + its 33-byte pubkey hex. */
+export function attachSignature(ev, pubHex, sigHex) {
+  ev.pub = String(pubHex).toLowerCase();
+  ev.sig = String(sigHex).toLowerCase();
+  return ev;
+}
+
+// --- moderator invite tickets (qaku ADR 0001; same scheme as scala ADR 0022) -----------------
+// The invite link carries a one-time TICKET private key. An owner/admin posts
+// member.invite {ticket: address(ticketPub), role}; whoever opens the link posts
+// member.claim {ticket, ticketPub, member, ticketSig} under THEIR identity for this room.
+// ticketSig proves they hold the ticket key (members who merely saw the invite in the log
+// can't claim it), and binds the claim to this room + this member. roomId = the room's
+// topic hash (also the Loam identity context). Mirrors qaku_identity.hpp exactly.
+export function inviteClaimMessage(roomId, ticket, member) {
+  return "qaku-invite-claim-v1|" + roomId + "|" + ticket + "|" + member;
+}
+export function signInviteClaim(ticketPriv, roomId, member) {
+  const t = identityFromPriv(ticketPriv);
+  const sig = secp256k1.sign(sha256(utf8Bytes(inviteClaimMessage(roomId, t.address, member))), ticketPriv);
+  return { ticket: t.address, ticketPub: t.pubHex, ticketSig: sig.toCompactHex() };
+}
+// noble's verify rejects a high-S signature (lowS default); the C++ twin checks low-S explicitly.
+export function verifyInviteClaim(roomId, ticket, ticketPub, member, ticketSig) {
+  try {
+    if (typeof roomId !== "string" || !roomId || typeof ticket !== "string" || typeof member !== "string") return false;
+    if (typeof ticketPub !== "string" || !/^[0-9a-f]{66}$/.test(ticketPub)) return false;
+    if (typeof ticketSig !== "string" || !/^[0-9a-f]{128}$/.test(ticketSig)) return false;
+    const pub = fromHex(ticketPub);
+    if (addressFor(pub) !== ticket) return false;
+    return secp256k1.verify(fromHex(ticketSig), sha256(utf8Bytes(inviteClaimMessage(roomId, ticket, member))), pub);
+  } catch {
+    return false;
+  }
+}
+
 // Per event type: the payload keys its constructor always sets but which may be undefined (so the
 // pre-fix signer hashed them as null). Only used by verifyEvent's legacy fallback.
 const LEGACY_OPTIONAL = {

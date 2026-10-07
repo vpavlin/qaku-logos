@@ -13,7 +13,8 @@
 //
 // Build + run (from the repo root):
 //   g++ -std=c++17 -Iqaku_core/src -I<nlohmann>/include qaku_core/test/engine_harness.cpp
-//       -o /tmp/engine_harness -lcrypto && /tmp/engine_harness packages/engine/test/vectors/rules.json
+//       -o /tmp/engine_harness -lcrypto && /tmp/engine_harness packages/engine/test/vectors/rules.json \
+//       packages/engine/test/vectors/invites.json
 // Exit 0 + "PASS" only if everything holds.
 #include <cstdio>
 #include <cstdlib>
@@ -24,6 +25,7 @@
 #include <algorithm>
 #include "qaku_engine.hpp"
 #include "qaku_persist_std.hpp"
+#include "logos_sync/catchup.hpp"
 
 using namespace qaku;
 
@@ -40,6 +42,7 @@ static json project(const json& st) {
     std::vector<std::string> admins = st["admins"].get<std::vector<std::string>>();
     std::sort(admins.begin(), admins.end());
     out["admins"] = admins;
+    out["invites"] = st["invites"];
     out["names"] = st["names"].empty() ? json::object() : st["names"];
     json qs = json::array();
     for (const auto& q : st["questions"]) {
@@ -72,7 +75,7 @@ static void parity(const char* path) {
         for (size_t k = 1; k < evs.size(); k += 3) { std::vector<Event> r = evs; std::rotate(r.begin(), r.begin() + k, r.end()); orders.push_back(r); }
         for (size_t o = 0; o < orders.size(); o++) {
             json got;
-            try { got = project(computeState(orders[o], c.value("me", std::string()))); }
+            try { got = project(computeState(orders[o], c.value("me", std::string()), c.value("roomId", std::string()))); }
             catch (const std::exception& e) { fprintf(stderr, "FAIL [%s] order %zu threw: %s\n", c["name"].get<std::string>().c_str(), o, e.what()); g_fail++; continue; }
             if (got != c["expect"]) {
                 g_fail++;
@@ -171,9 +174,83 @@ static void registryFresh() {
     printf("registry fresh flag ok\n");
 }
 
+// Invite tickets (qaku ADR 0001): the C++ signer/verifier on their own (the fold itself is checked
+// against the JS-signed vectors/invites.json by parity()).
+static void inviteCrypto() {
+    Bytes tpriv(32, 0); tpriv[31] = 0x21;
+    Bytes mpriv(32, 0); mpriv[31] = 0x06;
+    SignId member = identityFromPriv(mpriv);
+    const std::string room = "9f1c0a5e7b3d4c2a8e6f1d0b3a5c7e9f";
+    InviteClaim c = signInviteClaim(tpriv, room, member.address);
+    CHECK(c.ok, "signInviteClaim");
+    CHECK(verifyInviteClaim(room, c.ticket, c.ticketPub, member.address, c.ticketSig), "own claim verifies");
+    CHECK(!verifyInviteClaim("other", c.ticket, c.ticketPub, member.address, c.ticketSig), "other room rejected");
+    CHECK(!verifyInviteClaim("", c.ticket, c.ticketPub, member.address, c.ticketSig), "empty room rejected");
+    CHECK(!verifyInviteClaim(room, c.ticket, c.ticketPub, "0x00", c.ticketSig), "other member rejected");
+    // the high-S twin: OpenSSL alone would accept it - the low-S gate must reject it
+    static const unsigned char kN[32] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFE,
+                                         0xBA,0xAE,0xDC,0xE6,0xAF,0x48,0xA0,0x3B,0xBF,0xD2,0x5E,0x8C,0xD0,0x36,0x41,0x41};
+    Bytes sig = fromHex(c.ticketSig);
+    Bytes hi(sig.begin(), sig.begin() + 32);
+    { int borrow = 0; Bytes sN(32); for (int i = 31; i >= 0; i--) { int d = (int)kN[i] - sig[32 + i] - borrow; borrow = d < 0; sN[i] = (uint8_t)(d + (borrow ? 256 : 0)); } hi.insert(hi.end(), sN.begin(), sN.end()); }
+    CHECK(ecdsaVerify(fromHex(c.ticketPub), sha256(strBytes(inviteClaimMessage(room, c.ticket, member.address))), hi), "sanity: OpenSSL accepts the high-S twin");
+    CHECK(!verifyInviteClaim(room, c.ticket, c.ticketPub, member.address, toHex(hi.data(), 64)), "high-S claim rejected");
+    // an event signed via the external-signer path (stamp + digest + attach) == signEvent
+    Event e = mk("x", T::MEMBER_CLAIM, 5, "", {{"ticket", c.ticket}});
+    stampAuthor(e, member.address);
+    Bytes d = fromHex(eventDigestHex(e));
+    Bytes es = ecdsaSignLowS(member.priv, d);
+    e.pub = member.pubHex; e.sig = toHex(es.data(), es.size());
+    CHECK(verifyEvent(e), "externally signed event verifies");
+    Event hiE = e; Bytes eh(es.begin(), es.begin() + 32);
+    { int borrow = 0; Bytes sN(32); for (int i = 31; i >= 0; i--) { int dd = (int)kN[i] - es[32 + i] - borrow; borrow = dd < 0; sN[i] = (uint8_t)(dd + (borrow ? 256 : 0)); } eh.insert(eh.end(), sN.begin(), sN.end()); }
+    hiE.sig = toHex(eh.data(), 64);
+    CHECK(!verifyEvent(hiE), "high-S event signature rejected (as noble does)");
+    printf("invite crypto ok\n");
+}
+
+// Regression (live e2e 2026-10-06): a joiner never received the room history because both
+// desktops used the default transport id "qaku-core" - catch-up frames from a peer with OUR id are
+// dropped as self-echo. Simulate the RBSR exchange the module runs (respond() per frame, served
+// events merged) between an owner holding the log and an empty joiner.
+static size_t catchupBetween(const std::string& ownerId, const std::string& joinerId) {
+    std::vector<Event> owner = { mk("c", T::SESSION_CREATE, 1, "0xA", {{"sessionId", "r"}, {"title", "t"}}),
+                                 mk("q", T::QUESTION_ADD, 2, "0xA", {{"questionId", "q1"}, {"content", "hi"}}) };
+    std::vector<Event> joiner;
+    // frames in flight: (to-joiner?, msg)
+    std::vector<std::pair<bool, json>> wire = { {false, logos_sync::catchup::buildInitial(joiner, joinerId)},
+                                               {true, logos_sync::catchup::buildInitial(owner, ownerId)} };
+    for (int round = 0; round < 20 && !wire.empty(); round++) {
+        std::vector<std::pair<bool, json>> next;
+        for (auto& f : wire) {
+            bool toJoiner = f.first;
+            auto st = logos_sync::catchup::respond(toJoiner ? joiner : owner, f.second, toJoiner ? joinerId : ownerId);
+            for (auto& r : st.replies) next.push_back({!toJoiner, r});
+            for (auto& e : st.serve) {
+                auto& dst = toJoiner ? owner : joiner;
+                bool have = false; for (auto& x : dst) if (x.id == e.id) have = true;
+                if (!have) dst.push_back(e);
+            }
+        }
+        wire.swap(next);
+    }
+    return joiner.size();
+}
+static void deviceIds() {
+    std::string a = persist::newDeviceId(), b = persist::newDeviceId();
+    CHECK(a != b && a != "qaku-core" && a.rfind("qaku-core-", 0) == 0 && a.size() == 22, "newDeviceId is unique per install");
+    CHECK(catchupBetween("qaku-core", "qaku-core") == 0, "sanity: with the SAME transport id the joiner gets nothing (the bug)");
+    CHECK(catchupBetween(a, b) == 2, "with distinct ids the joiner catches up the whole log");
+    printf("device ids + catch-up ok\n");
+}
+
 int main(int argc, char** argv) {
     const char* vec = argc > 1 ? argv[1] : "packages/engine/test/vectors/rules.json";
+    const char* inv = argc > 2 ? argv[2] : "packages/engine/test/vectors/invites.json";
     parity(vec);
+    parity(inv);
+    inviteCrypto();
+    deviceIds();
     crashCases();
     registryFresh();
     if (g_fail) { printf("FAIL (%d)\n", g_fail); return 1; }

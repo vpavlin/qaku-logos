@@ -18,10 +18,16 @@
 #include <openssl/ecdsa.h>
 #include <openssl/obj_mac.h>
 #include <openssl/bn.h>
+#include <nlohmann/json.hpp>
 #include "qaku_crypto.hpp"   // Bytes, toHex, sha256, RAND
-#include "qaku_engine.hpp"   // Event, HLC, json
+// Event / HLC straight from logos-sync (NOT qaku_engine.hpp): the engine includes THIS header
+// for verifyEvent / verifyInviteClaim (invite tickets are folded in admitEvents, qaku ADR 0001).
+#include "logos_sync/event.hpp"
 
 namespace qaku {
+using json = nlohmann::json;
+using logos_sync::Event;
+using logos_sync::HLC;
 
 struct SignId {
     Bytes priv;            // 32B scalar
@@ -162,6 +168,15 @@ inline Bytes ecdsaSignLowS(const Bytes& priv, const Bytes& digest32) {
     return out;
 }
 
+// s <= n/2. noble's verify (phone + JS engine) rejects the high-S twin of a signature and
+// OpenSSL accepts it, so every C++ check that must agree with the JS fold requires low-S.
+inline bool isLowS(const Bytes& sig64) {
+    static const unsigned char kHalfN[32] = {0x7F,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+                                             0x5D,0x57,0x6E,0x73,0x57,0xA4,0x50,0x1D,0xDF,0xE9,0x2F,0x46,0x68,0x1B,0x20,0xA0};
+    if (sig64.size() != 64) return false;
+    return !std::lexicographical_compare(kHalfN, kHalfN + 32, sig64.begin() + 32, sig64.end());
+}
+
 inline bool ecdsaVerify(const Bytes& pub33, const Bytes& digest32, const Bytes& sig64) {
     if (pub33.size() != 33 || sig64.size() != 64) return false;
     bool ok = false;
@@ -179,6 +194,20 @@ inline bool ecdsaVerify(const Bytes& pub33, const Bytes& digest32, const Bytes& 
     }
     EC_POINT_free(pt); BN_CTX_free(ctx); EC_KEY_free(key);
     return ok;
+}
+
+// Lowercase hex check (the JS verifier only accepts /^[0-9a-f]{n}$/).
+inline bool isLowerHex(const std::string& s, size_t n) {
+    if (s.size() != n) return false;
+    for (char c : s) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    return true;
+}
+
+// --- external signers (Loam hdSign, qaku ADR 0001): stamp + digest here, sign in loam_core, attach ---
+inline void stampAuthor(Event& e, const std::string& address) { e.dev = address; e.hlc.dev = address; }
+inline std::string eventDigestHex(const Event& e) {
+    Bytes d = sha256(strBytes(canonicalMessage(e)));
+    return toHex(d.data(), d.size());
 }
 
 // Stamp the event with our address as author (dev + hlc.dev) and sign. Mutates ev.
@@ -200,10 +229,35 @@ inline bool verifyEvent(const Event& e) {
     if (pub.size() != 33) return false;
     Bytes h = sha256(pub);
     if ("0x" + toHex(h.data(), 32).substr(24, 40) != dev) return false;
+    if (!isLowerHex(e.pub, 66) || !isLowerHex(e.sig, 128)) return false;   // same shape gate as the JS verifier
     Bytes sig = fromHex(e.sig);
-    if (sig.size() != 64) return false;
+    if (sig.size() != 64 || !isLowS(sig)) return false;
     Bytes digest = sha256(strBytes(canonicalMessage(e)));
     return ecdsaVerify(pub, digest, sig);
+}
+
+// --- moderator invite tickets (qaku ADR 0001) - mirrors identity.mjs inviteClaimMessage/sign/verify ---
+inline std::string inviteClaimMessage(const std::string& roomId, const std::string& ticket, const std::string& member) {
+    return "qaku-invite-claim-v1|" + roomId + "|" + ticket + "|" + member;
+}
+struct InviteClaim { std::string ticket, ticketPub, ticketSig; bool ok = false; };
+inline InviteClaim signInviteClaim(const Bytes& ticketPriv, const std::string& roomId, const std::string& member) {
+    InviteClaim c; SignId t = identityFromPriv(ticketPriv); if (!t.valid) return c;
+    Bytes sig = ecdsaSignLowS(ticketPriv, sha256(strBytes(inviteClaimMessage(roomId, t.address, member))));
+    if (sig.size() != 64) return c;
+    c.ticket = t.address; c.ticketPub = t.pubHex; c.ticketSig = toHex(sig.data(), sig.size()); c.ok = true;
+    return c;
+}
+inline bool verifyInviteClaim(const std::string& roomId, const std::string& ticket, const std::string& ticketPub,
+                              const std::string& member, const std::string& ticketSig) {
+    if (roomId.empty() || !isLowerHex(ticketPub, 66) || !isLowerHex(ticketSig, 128)) return false;
+    Bytes pub = fromHex(ticketPub);
+    if (pub.size() != 33) return false;
+    Bytes h = sha256(pub);
+    if ("0x" + toHex(h.data(), 32).substr(24, 40) != ticket) return false;
+    Bytes sig = fromHex(ticketSig);
+    if (sig.size() != 64 || !isLowS(sig)) return false;   // low-S, exactly like noble on the phone
+    return ecdsaVerify(pub, sha256(strBytes(inviteClaimMessage(roomId, ticket, member))), sig);
 }
 
 } // namespace qaku

@@ -4,7 +4,7 @@
 // C++ core (qaku_core) must reproduce it exactly. See DESIGN.md.
 
 import { EventType, Role, UpvoteTarget } from "../../contract/src/events.mjs";
-import { verifyEvent } from "../../contract/src/identity.mjs";
+import { verifyEvent, verifyInviteClaim } from "../../contract/src/identity.mjs";
 // The CRDT merge (union-by-id + HLC ordering) is now SOURCED FROM loam-sync (single
 // source), imported from the in-tree submodule's dist by RELATIVE path — same union +
 // compareHlc ordering qaku always used. qaku keeps its own fold + event types below.
@@ -82,9 +82,20 @@ const PARTICIPANT_EVENTS = new Set([
  * events are dropped deterministically (same input set ⇒ same result in any
  * arrival order), so convergence still holds. This is enforcement-on-merge:
  * attribution, not cryptographic authorization.
- * Returns { admitted (HLC-ordered), owner, admins:[], isSession }.
+ * Invite tickets (qaku ADR 0001) fold in the same HLC-ordered pass as admin.add/remove:
+ *   member.invite {ticket, role} — SIGNED by a current owner/admin; role "admin" offers admin
+ *     to whoever holds the ticket key, "revoke" withdraws a pending ticket. A redeemed ticket
+ *     can't be re-offered or revoked (use admin.remove).
+ *   member.claim {ticket, ticketPub, member, ticketSig} — SIGNED by `member` (the claimer's
+ *     own address), member != owner, the ticket pending, and ticketSig a valid low-S signature
+ *     by ticketPub (address(ticketPub) == ticket) over
+ *     sha256("qaku-invite-claim-v1|" + roomId + "|" + ticket + "|" + member).
+ *   The FIRST valid claim in HLC order wins; later claims of the same ticket are ignored.
+ * `roomId` = the room's topic hash (both platforms derive it from the secret); without it no
+ * claim can verify. Returns { admitted (HLC-ordered), owner, admins:[], invites:{ticket:role},
+ * isSession }.
  */
-export function admitEvents(events) {
+export function admitEvents(events, roomId = "") {
   // Signature gate first: drop forged/invalid-signed events (and, in strict mode,
   // unsigned ones) before any role fold, so a bad signer can't influence admission.
   const ordered = mergeEvents(events.filter(sigOk));
@@ -99,7 +110,31 @@ export function admitEvents(events) {
   // Fold the admin set in HLC order, each membership change gated by the set.
   const admins = new Set();
   if (owner) admins.add(owner);
+  const invites = new Map();      // pending ticket -> offered role (qaku ADR 0001)
+  const claimed = new Set();      // redeemed tickets (one-time)
+  const ticketEvents = new Set(); // ids of the invite/claim events that took effect
   for (const e of ordered) {
+    if (e.type === EventType.MEMBER_INVITE || e.type === EventType.MEMBER_CLAIM) {
+      if (!owner || !sigVerified(e)) continue;       // ticket events must be signed by their author
+      const p = payloadOf(e);
+      const t = str(p.ticket);
+      if (!t || claimed.has(t)) continue;            // a redeemed ticket is final
+      if (e.type === EventType.MEMBER_INVITE) {
+        if (!admins.has(e.hlc.dev)) continue;        // only a current owner/admin may offer one
+        const r = str(p.role);
+        if (r === "revoke") { invites.delete(t); ticketEvents.add(e.id); }
+        else if (r === "admin") { invites.set(t, r); ticketEvents.add(e.id); }
+      } else {
+        const m = str(p.member);
+        if (!m || m !== e.hlc.dev || m === owner || !invites.has(t)) continue;
+        if (!verifyInviteClaim(roomId, t, p.ticketPub, m, p.ticketSig)) continue;
+        admins.add(m);
+        invites.delete(t);
+        claimed.add(t);
+        ticketEvents.add(e.id);
+      }
+      continue;
+    }
     if (!ADMIN_EVENTS.has(e.type)) continue;
     if (!admins.has(e.hlc.dev)) continue;            // only an admin may change admins
     const m = str(payloadOf(e).memberId);
@@ -127,6 +162,10 @@ export function admitEvents(events) {
       if (admins.has(author)) admitted.push(e);      // (already folded above; keep for downstream)
       continue;
     }
+    if (e.type === EventType.MEMBER_INVITE || e.type === EventType.MEMBER_CLAIM) {
+      if (ticketEvents.has(e.id)) admitted.push(e);  // only the ones that took effect above
+      continue;
+    }
     if (MOD_EVENTS.has(e.type)) {
       if (admins.has(author)) admitted.push(e);
       continue;
@@ -138,7 +177,9 @@ export function admitEvents(events) {
     if (PARTICIPANT_EVENTS.has(e.type)) { admitted.push(e); continue; }
     // unknown type — drop
   }
-  return { admitted, owner, admins: [...admins], isSession };
+  const pending = {};
+  for (const t of [...invites.keys()].sort()) pending[t] = invites.get(t);
+  return { admitted, owner, admins: [...admins], invites: pending, isSession };
 }
 
 /** Fold per-(target,voter) LWW upvote registers → Set<voter> of live upvoters per target. */
@@ -168,12 +209,14 @@ function foldUpvotes(ordered) {
 /**
  * Fold an event log (possibly unordered / with duplicates) into session state.
  * @param {object[]} events
- * @param {{me?: string}} [opts] the viewer's identity (author address); only used to
- *   emit each poll's `myVote` (that voter's live optionId, or null). Never changes the fold.
+ * @param {{me?: string, roomId?: string}} [opts] `me` = the viewer's identity (author
+ *   address); only used to emit each poll's `myVote` (that voter's live optionId, or null).
+ *   `roomId` = the room's topic hash, which invite claims are bound to (qaku ADR 0001).
  */
 export function computeState(events, opts = {}) {
   const me = opts && typeof opts.me === "string" && opts.me ? opts.me : null;
-  const admission = admitEvents(events);
+  const roomId = opts && typeof opts.roomId === "string" ? opts.roomId : "";
+  const admission = admitEvents(events, roomId);
   const ordered = admission.admitted;
 
   let session = null; // {id, title, description, enabled, moderationEnabled}
@@ -308,6 +351,7 @@ export function computeState(events, opts = {}) {
     session,
     owner: admission.owner,
     admins: admission.admins,
+    invites: admission.invites,
     isSession: admission.isSession,
     names: Object.fromEntries(names),
     questions: liveQuestions,
