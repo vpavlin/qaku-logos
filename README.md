@@ -4,6 +4,8 @@ A **Q&A board** rebuilt as a **local-first, peer-to-peer, end-to-end-encrypted L
 
 Built by applying the [`logos-skills`](https://github.com/vpavlin/logos-skills) playbook to qaku's domain (sessions, questions, upvotes, answers, polls). See [`DESIGN.md`](DESIGN.md) for the event model and [`CHANGELOG.md`](CHANGELOG.md) for release history.
 
+**Demo:** a 5-minute walkthrough for showing QAKU live is in [`docs/demo.md`](docs/demo.md).
+
 ## Layout
 - **`packages/`** — the portable spine (TS): `contract` (events + HLC), `engine` (fold/merge/invariant), `sync` (crypto + wire + RBSR). **Convergence property test passes 7/7** (`npm test`).
 - **`qaku_core/`** — the universal C++ core module (engine mirror, crypto, delivery wiring).
