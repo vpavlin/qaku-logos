@@ -403,13 +403,13 @@
       <p class="note">Needs an <b>arm64</b> phone. <b>Loam recommended:</b> install Loam from the same repo and all your Logos apps share one node (plus experimental Bluetooth). Without Loam, QAKU runs its own node.</p>
     </div>
     <div class="inst">
-      <h3>🖥️ Basecamp 0.2.x</h3>
+      <h3>🖥️ Basecamp 0.3</h3>
       <ol>
         <li>In <a href="https://logos.co" style="color:var(--teal)">Logos</a> Basecamp, open <b>Settings → Package Repositories</b> and add:<span class="url">https://apps.vpavlin.xyz/logos-repo.json</span></li>
         <li>Install <b>qaku</b> (shown as “QAKU - Q&amp;A”). It pulls in <b>qaku_core</b> (the engine and sync), which pulls in <b>loam_core</b> and its own dependencies (delivery_module, ble_mesh, keycard) automatically.</li>
         <li>Open QAKU and create a Q&amp;A. It shows a join QR.</li>
       </ol>
-      <p class="note">Supported on <b>Basecamp 0.2.x</b>. Basecamp 0.3 support is coming.</p>
+      <p class="note">Supported on <b>Basecamp 0.3</b>, Linux x64, Linux ARM64 and macOS.</p>
       <p class="cc" style="margin-top:14px;text-align:left">Source on <a href="https://github.com/vpavlin/qaku-logos" style="color:var(--teal)">GitHub</a> · more apps at <a href="https://apps.vpavlin.xyz/" style="color:var(--teal)">apps.vpavlin.xyz</a></p>
     </div>
   </div>
@@ -435,7 +435,7 @@
   <div class="lim">
     <div class="fc"><h3>Limitations</h3><ul>
       <li><b>Android:</b> arm64 phones only.</li>
-      <li><b>Desktop:</b> Basecamp 0.2.x; 0.3 support is coming.</li>
+      <li><b>Desktop:</b> Basecamp 0.3 on Linux x64, Linux ARM64 and macOS.</li>
       <li><b>No secret revocation:</b> once a room's link is out, it stays readable to whoever has it.</li>
       <li><b>One key per device</b> across all rooms, so your posts are linkable between rooms.</li>
       <li><b>Store nodes</b> hold sealed messages for a retention window.</li>
