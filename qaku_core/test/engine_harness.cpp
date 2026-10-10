@@ -25,6 +25,7 @@
 #include <algorithm>
 #include "qaku_engine.hpp"
 #include "qaku_persist_std.hpp"
+#include "qaku_wire_std.hpp"
 #include "logos_sync/catchup.hpp"
 
 using namespace qaku;
@@ -244,6 +245,32 @@ static void deviceIds() {
     printf("device ids + catch-up ok\n");
 }
 
+// 4. RBSR catch-up frames from a peer: only the shape the vendored respond() can read is
+//    accepted (a missing "bounds" was an assertion abort, a numeric id a type_error), and every
+//    frame our own buildFp/respond emit passes.
+static void catchupShapes() {
+    auto cu = [](const char* s) { return qaku::catchupWellFormed(json::parse(s)); };
+    CHECK(cu(R"({"v":2,"t":"fp","from":"p","bounds":["b"],"fps":["x","y"]})"), "catchup fp ok");
+    CHECK(cu(R"({"v":2,"t":"ids","from":"p","lo":"a","ids":["a","b"]})"), "catchup ids ok");
+    CHECK(!cu(R"({"v":2,"t":"fp","from":"p","fps":["x","y"]})"), "catchup fp missing bounds rejected");
+    CHECK(!cu(R"({"v":2,"t":"fp","from":"p","bounds":[],"fps":["x","y"]})"), "catchup fp short bounds rejected");
+    CHECK(!cu(R"({"v":2,"t":"ids","from":"p","ids":[5]})"), "catchup numeric id rejected");
+    CHECK(!cu(R"({"v":2,"t":"need","from":"p"})"), "catchup need without ids rejected");
+    CHECK(!cu(R"({"v":2,"t":"fp","from":7,"bounds":[],"fps":["x"]})"), "catchup numeric from rejected");
+    std::vector<Event> a, b;
+    for (int i = 0; i < 40; i++) { Event e; e.id = "id" + std::to_string(i * 37 % 100); a.push_back(e); if (i % 3) b.push_back(e); }
+    std::vector<json> q{logos_sync::catchup::buildInitial(a, "A")};
+    int rounds = 0, rejected = 0;
+    while (!q.empty() && rounds++ < 100) {
+        json m = q.back(); q.pop_back();
+        if (!qaku::catchupWellFormed(m)) rejected++;
+        auto st = logos_sync::catchup::respond(rounds % 2 ? b : a, m, rounds % 2 ? "B" : "A");
+        for (auto& r : st.replies) q.push_back(r);
+    }
+    CHECK(rejected == 0, "every real catch-up frame passes catchupWellFormed");
+    printf("catchup frame shapes ok (%d real frames)\n", rounds);
+}
+
 int main(int argc, char** argv) {
     const char* vec = argc > 1 ? argv[1] : "packages/engine/test/vectors/rules.json";
     const char* inv = argc > 2 ? argv[2] : "packages/engine/test/vectors/invites.json";
@@ -253,6 +280,7 @@ int main(int argc, char** argv) {
     deviceIds();
     crashCases();
     registryFresh();
+    catchupShapes();
     if (g_fail) { printf("FAIL (%d)\n", g_fail); return 1; }
     printf("PASS\n");
     return 0;

@@ -789,8 +789,8 @@ void QakuCoreImpl::loadOverlayConfig() {
     try {
         std::stringstream ss; ss << f.rdbuf();
         json c = json::parse(ss.str());
-        m_overlayEnabled = c.value("enabled", false);
-        int p = c.value("port", 7337);
+        m_overlayEnabled = qaku::jbool(c, "enabled", false);
+        int p = qaku::jget<int>(c, "port", 7337);
         if (p > 0 && p < 65536) m_overlayPort = (unsigned short)p;
     } catch (const std::exception&) { /* corrupt config = defaults, never a failed start */ }
 }
@@ -820,9 +820,10 @@ std::string QakuCoreImpl::setOverlay(std::string patchJson) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
     try {
         json p = json::parse(patchJson);
-        if (p.contains("enabled")) m_overlayEnabled = p["enabled"].is_string() ? (p["enabled"] == "true") : p.value("enabled", false);
+        if (!p.is_object()) return std::string("{\"error\":\"overlay patch must be an object\"}");
+        if (p.contains("enabled")) m_overlayEnabled = p["enabled"].is_string() ? (p["enabled"] == "true") : qaku::jbool(p, "enabled", false);
         if (p.contains("port")) {
-            int v = p["port"].is_string() ? std::atoi(p["port"].get<std::string>().c_str()) : p.value("port", 0);
+            int v = p["port"].is_string() ? std::atoi(p["port"].get<std::string>().c_str()) : qaku::jget<int>(p, "port", 0);
             if (v <= 0 || v >= 65536) return std::string("{\"error\":\"port must be 1-65535\"}");
             m_overlayPort = (unsigned short)v;
         }
@@ -938,7 +939,7 @@ std::string QakuCoreImpl::resync() {
 // --- admission helper: is this device owner/admin in the CURRENT session? ---
 std::string QakuCoreImpl::adminGuard() {
     json s = foldOf(cur());
-    if (!s.value("isSession", false)) return "";
+    if (!qaku::jbool(s, "isSession", false)) return "";
     const std::string me = addrOf(cur());
     for (auto& a : s["admins"]) if (!me.empty() && a == me) return "";
     return "{\"error\":\"not an owner/admin\"}";
@@ -1343,12 +1344,14 @@ bool QakuCoreImpl::openAndPush(Session& s, const std::string& sealed) {
     m_rxOpened++;
     try {
         json o = json::parse(plain);
-        const std::string type = o.value("type", "");
+        // A peer wrote this frame: typed reads only (a wrong-typed field drops the frame, never throws).
+        const std::string type = qaku::jstr(o, "type");
         // RBSR catch-up control frame (fp/ids/need): reconcile the id-set and serve/pull the EXACT
         // delta. respond() is a pure state-machine step; its replies + served events go back over the
         // channel and converge in a few rounds. This is the recovery path that a plain client lacked.
-        const std::string t = o.value("t", std::string());
-        if (o.value("v", 0) == 2 && (t == "fp" || t == "ids" || t == "need")) {
+        const std::string t = qaku::jstr(o, "t");
+        if (qaku::jget<int>(o, "v", 0) == 2 && (t == "fp" || t == "ids" || t == "need")) {
+            if (!qaku::catchupWellFormed(o)) return true;   // malformed: respond() would throw / assert-abort
             auto stp = logos_sync::catchup::respond(s.log, o, m_deviceId);
             for (auto& reply : stp.replies) sealAndSendJson(s, reply);
             for (auto& ev : stp.serve)   sealAndSend(s, ev);
@@ -1362,14 +1365,16 @@ bool QakuCoreImpl::openAndPush(Session& s, const std::string& sealed) {
             // request echoed back. Debounced to 3s so a reconnecting peer spamming
             // SYNC_REQ can't restack full re-serves into a flood, while still being
             // responsive for a genuine join.
-            if (o.value("from", "") != m_deviceId && nowMs() - m_lastSyncReserveMs >= 3000) {
+            if (qaku::jstr(o, "from") != m_deviceId && nowMs() - m_lastSyncReserveMs >= 3000) {
                 m_lastSyncReserveMs = nowMs();
                 for (auto& e : s.log) sealAndSend(s, e);
             }
             return true;
         }
         if (type == "EVENT" && o.contains("event")) {
-            Event e = qaku::eventFromJson(o["event"]);
+            if (!o["event"].is_object()) return true;
+            Event e;
+            try { e = qaku::eventFromJson(o["event"]); } catch (const std::exception&) { return true; }   // wrong-typed id/hlc: drop
             if (s.ids.count(e.id)) { m_rxDup++; return true; }
             m_rxNew++;
             pushEvent(s, e, false);
